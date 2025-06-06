@@ -519,7 +519,7 @@ private enum Vision {
 ///
 /// This is meant to be used with ``Qwen2VL`` and is typically created by ``VLMModelFactory``.
 public class Qwen2VLProcessor: UserInputProcessor {
-    private let config: Qwen2VLProcessorConfiguration
+    public var config: Qwen2VLProcessorConfiguration
     private let tokenizer: any Tokenizer
 
     public init(_ config: Qwen2VLProcessorConfiguration, tokenizer: any Tokenizer) {
@@ -548,6 +548,7 @@ public class Qwen2VLProcessor: UserInputProcessor {
             factor: config.patchSize * config.mergeSize,
             minPixels: config.minPixels, maxPixels: config.maxPixels)
         let resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
+        print("resizedWidth: \(resizedSize.width), resizedHeight: \(resizedSize.height)")
 
         let processedImages = try images.map { image in
             preprocess(image: image, resizedSize: resizedSize).asMLXArray()
@@ -604,6 +605,7 @@ public class Qwen2VLProcessor: UserInputProcessor {
                             minPixels: config.minPixels, maxPixels: config.maxPixels)
                         resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
                     }
+                    print("resizedWidth: \(resizedSize.width), resizedHeight: \(resizedSize.height)")
                     let processedImage = preprocess(image: resizedImage, resizedSize: resizedSize)
                     return VideoFrame(frame: processedImage, timeStamp: frame.timeStamp)
                 }
@@ -870,14 +872,24 @@ public struct Qwen2VLProcessorConfiguration: Codable, Sendable {
     public let temporalPatchSize: Int
 
     private let _size: Size?
-    private let _maxPixels: Int?
-    private let _minPixels: Int?
+    public var _maxPixels: Int?
+    public var _minPixels: Int?
 
     public var minPixels: Int {
-        _minPixels ?? _size?.minPixels ?? 3136
+        get {
+            _minPixels ?? _size?.minPixels ?? 3136
+        }
+        set {
+            _minPixels = newValue
+        }
     }
     public var maxPixels: Int {
-        _maxPixels ?? _size?.maxPixels ?? 12_845_056
+        get {
+            _maxPixels ?? _size?.maxPixels ?? 12_845_056
+        }
+        set {
+            _maxPixels = newValue
+        }
     }
 
     public var imageMeanTuple: (CGFloat, CGFloat, CGFloat) {

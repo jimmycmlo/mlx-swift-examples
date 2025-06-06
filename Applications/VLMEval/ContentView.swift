@@ -335,7 +335,8 @@ class VLMEvaluator {
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
-    let modelConfiguration = VLMRegistry.smolvlm
+//    let modelConfiguration = VLMRegistry.smolvlm
+    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
 
     /// parameters controlling the output – use values appropriate for the model selected above
     let generateParameters = MLXLMCommon.GenerateParameters(
@@ -366,6 +367,16 @@ class VLMEvaluator {
                 Task { @MainActor in
                     self.modelInfo =
                         "Downloading \(modelConfiguration.name): \(Int(progress.fractionCompleted * 100))%"
+                }
+            }
+
+            // Modify the processor configuration to set custom pixel values
+            await modelContainer.update { context in
+                if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
+                    // Set maxPixel to 256 * 28 * 28 = 200,704
+                    // Set minPixel to 128 * 28 * 28 = 100,352
+                    qwen2vlProcessor.config.maxPixels = 256 * 28 * 28
+                    qwen2vlProcessor.config.minPixels = 128 * 28 * 28
                 }
             }
 
@@ -410,7 +421,7 @@ class VLMEvaluator {
                 ]
 
                 var userInput = UserInput(chat: chat)
-                userInput.processing.resize = .init(width: 448, height: 448)
+//                userInput.processing.resize = .init(width: 448, height: 448)
 
                 let lmInput = try await context.processor.prepare(input: userInput)
 
