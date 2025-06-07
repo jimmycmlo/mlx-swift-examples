@@ -370,13 +370,9 @@ class VLMEvaluator {
                 }
             }
 
-            // Modify the processor configuration to set custom pixel values, maxFrames, and FPS
+            // Modify the processor configuration to set maxFrames and FPS
             await modelContainer.update { context in
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
-                    // Set maxPixel to 256 * 28 * 28 = 200,704
-                    // Set minPixel to 64 * 28 * 28 = 50,176
-                    qwen2vlProcessor.config.maxPixels = 256 * 28 * 28
-                    qwen2vlProcessor.config.minPixels = 64 * 28 * 28
                     // Set maxFrames for video processing
                     qwen2vlProcessor.config.maxFrames = 32
                     // Set FPS for video sampling
@@ -404,6 +400,21 @@ class VLMEvaluator {
 
         do {
             let modelContainer = try await load()
+
+            // Set pixel limits based on media type
+            await modelContainer.update { context in
+                if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
+                    if videoURL != nil {
+                        // For videos: lower pixel limits
+                        qwen2vlProcessor.config.maxPixels = 256 * 28 * 28  // 200,704
+                        qwen2vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
+                    } else if image != nil {
+                        // For images: higher pixel limits
+                        qwen2vlProcessor.config.maxPixels = 1024 * 28 * 28  // 401,408
+                        qwen2vlProcessor.config.minPixels = 256 * 28 * 28  // 200,704
+                    }
+                }
+            }
 
             // each time you generate you will get something new
             MLXRandom.seed(UInt64(Date.timeIntervalSinceReferenceDate * 1000))
