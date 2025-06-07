@@ -336,6 +336,7 @@ public enum MediaProcessing {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to load the asset's duration"])
         }
         let fps = targetFPS(duration)
+        print("fps: %.2f\n", fps)
         // Note: the round was not present in `asCIImageSequence`, so we may now be passing 1 more frame to Qwen depending on video duration.
         let estimatedFrames = Int(round(fps * duration.seconds))
         var desiredFrames = min(estimatedFrames, maxFrames)

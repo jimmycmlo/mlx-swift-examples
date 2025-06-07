@@ -592,7 +592,7 @@ public class Qwen2VLProcessor: UserInputProcessor {
             var resizedSize: CGSize = .zero
             for video in input.videos {
                 let imageSequence = try await MediaProcessing.asProcessedSequence(
-                    video.asAVAsset(), maxFrames: config.maxFrames, targetFPS: { _ in 2.0 }
+                    video.asAVAsset(), maxFrames: config.maxFrames, targetFPS: { _ in config.fps }
                 ) { frame in
                     // first apply the user requested resizing, etc. if any
                     let resizedImage = MediaProcessing.apply(
@@ -875,6 +875,7 @@ public struct Qwen2VLProcessorConfiguration: Codable, Sendable {
     public var _maxPixels: Int?
     public var _minPixels: Int?
     public var _maxFrames: Int?
+    public var _fps: Double?
 
     public var minPixels: Int {
         get {
@@ -900,6 +901,14 @@ public struct Qwen2VLProcessorConfiguration: Codable, Sendable {
             _maxFrames = newValue
         }
     }
+    public var fps: Double {
+        get {
+            _fps ?? 2.0
+        }
+        set {
+            _fps = newValue
+        }
+    }
 
     public var imageMeanTuple: (CGFloat, CGFloat, CGFloat) {
         (imageMean[0], imageMean[1], imageMean[2])
@@ -917,6 +926,7 @@ public struct Qwen2VLProcessorConfiguration: Codable, Sendable {
         case _maxPixels = "max_pixels"
         case _minPixels = "min_pixels"
         case _maxFrames = "max_frames"
+        case _fps = "fps"
         case _size = "size"
     }
 }

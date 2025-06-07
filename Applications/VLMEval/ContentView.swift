@@ -370,15 +370,17 @@ class VLMEvaluator {
                 }
             }
 
-            // Modify the processor configuration to set custom pixel values and maxFrames
+            // Modify the processor configuration to set custom pixel values, maxFrames, and FPS
             await modelContainer.update { context in
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
                     // Set maxPixel to 256 * 28 * 28 = 200,704
-                    // Set minPixel to 128 * 28 * 28 = 100,352
-                    qwen2vlProcessor.config.maxPixels = 128 * 28 * 28
+                    // Set minPixel to 64 * 28 * 28 = 50,176
+                    qwen2vlProcessor.config.maxPixels = 256 * 28 * 28
                     qwen2vlProcessor.config.minPixels = 64 * 28 * 28
                     // Set maxFrames for video processing
-                    qwen2vlProcessor.config.maxFrames = 64
+                    qwen2vlProcessor.config.maxFrames = 32
+                    // Set FPS for video sampling
+                    qwen2vlProcessor.config.fps = 1.0
                 }
             }
 
