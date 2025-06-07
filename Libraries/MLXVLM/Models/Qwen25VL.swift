@@ -665,7 +665,7 @@ private enum Vision {
 ///
 /// This is meant to be used with ``Qwen25VL`` and is typically created by ``VLMModelFactory``.
 public class Qwen25VLProcessor: UserInputProcessor {
-    private let config: Qwen25VLProcessorConfiguration
+    public var config: Qwen25VLProcessorConfiguration
     private let tokenizer: any Tokenizer
 
     public init(_ config: Qwen25VLProcessorConfiguration, tokenizer: any Tokenizer) {
@@ -750,7 +750,7 @@ public class Qwen25VLProcessor: UserInputProcessor {
             var resizedSize: CGSize = .zero
             for video in input.videos {
                 let imageSequence = try await MediaProcessing.asProcessedSequence(
-                    video.asAVAsset(), samplesPerSecond: 2
+                    video.asAVAsset(), maxFrames: config.maxFrames, targetFPS: { _ in config.fps }
                 ) { frame in
                     // first apply the user requested resizing, etc. if any
                     let resizedImage = MediaProcessing.apply(
@@ -1060,12 +1060,38 @@ public struct Qwen25VLProcessorConfiguration: Codable, Sendable {
 
     public let imageMean: [CGFloat]
     public let imageStd: [CGFloat]
-    public let minPixels: Int
-    public let maxPixels: Int
+    private let _minPixels: Int
+    private let _maxPixels: Int
     public let mergeSize: Int
     public let patchSize: Int
     public let temporalPatchSize: Int
     public let imageProcessorType: String
+    
+    // Runtime settable properties
+    public var _runtimeMaxPixels: Int?
+    public var _runtimeMinPixels: Int?
+    public var _maxFrames: Int?
+    public var _fps: Double?
+
+    public var minPixels: Int {
+        get { _runtimeMinPixels ?? _minPixels }
+        set { _runtimeMinPixels = newValue }
+    }
+    
+    public var maxPixels: Int {
+        get { _runtimeMaxPixels ?? _maxPixels }
+        set { _runtimeMaxPixels = newValue }
+    }
+    
+    public var maxFrames: Int {
+        get { _maxFrames ?? Int.max }
+        set { _maxFrames = newValue }
+    }
+    
+    public var fps: Double {
+        get { _fps ?? 2.0 }
+        set { _fps = newValue }
+    }
 
     public var imageMeanTuple: (CGFloat, CGFloat, CGFloat) {
         (imageMean[0], imageMean[1], imageMean[2])
@@ -1081,11 +1107,15 @@ public struct Qwen25VLProcessorConfiguration: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case imageMean = "image_mean"
         case imageStd = "image_std"
-        case minPixels = "min_pixels"
-        case maxPixels = "max_pixels"
+        case _minPixels = "min_pixels"
+        case _maxPixels = "max_pixels"
         case mergeSize = "merge_size"
         case patchSize = "patch_size"
         case temporalPatchSize = "temporal_patch_size"
         case imageProcessorType = "image_processor_type"
+        case _runtimeMaxPixels = "runtime_max_pixels"
+        case _runtimeMinPixels = "runtime_min_pixels"
+        case _maxFrames = "max_frames"
+        case _fps = "fps"
     }
 }
