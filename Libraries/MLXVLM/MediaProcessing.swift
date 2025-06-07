@@ -340,7 +340,7 @@ public enum MediaProcessing {
         let estimatedFrames = Int(round(fps * duration.seconds))
         var desiredFrames = min(estimatedFrames, maxFrames)
         let finalFrameCount = max(desiredFrames, 1)
-
+        print("finalFrameCount: \(finalFrameCount)")
         let sampledTimeValues = MLXArray.linspace(
             0, duration.value, count: Int(finalFrameCount)
         ).asArray(Int64.self)
