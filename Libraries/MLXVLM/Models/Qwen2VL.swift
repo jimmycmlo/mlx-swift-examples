@@ -741,6 +741,67 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         )
     }
 
+    /// Extract patch embeddings from a single image
+    /// 
+    /// This function preprocesses the image and applies patch embedding to get the initial hidden states.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let image = CIImage(contentsOf: imageURL)!
+    /// let patchEmbeddings = try model.extractPatchEmbeddings(from: image)
+    /// // patchEmbeddings shape: [numPatches, embedDimensions]
+    /// ```
+    /// 
+    /// - Parameter image: The input image as a CIImage
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Returns: The patch embeddings as an MLXArray
+    /// - Throws: VLMError if image processing fails
+    public func extractPatchEmbeddings(
+        from image: CIImage, 
+        processing: UserInput.Processing? = nil
+    ) throws -> MLXArray {
+        // Apply user processing if provided
+        let processedImage = MediaProcessing.apply(image, processing: processing)
+        
+        // Calculate target size for resizing
+        let size = processedImage.extent.size
+        let (resizedHeight, resizedWidth) = try QwenVL.targetSize(
+            height: Int(size.height), width: Int(size.width),
+            factor: config.visionConfiguration.patchSize * config.visionConfiguration.spatialMergeSize,
+            minPixels: 3136, maxPixels: 12_845_056)
+        let resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
+        
+        // Preprocess the image (resize, normalize)
+        let normalizedImage = processedImage
+            .toSRGB()
+            .resampled(to: resizedSize, method: .bicubic)
+            .normalized(mean: (0.48145466, 0.4578275, 0.40821073), std: (0.26862954, 0.26130258, 0.27577711))
+        
+        // Convert to MLXArray
+        let imageArray = normalizedImage.asMLXArray()
+        
+        // Patchify the image
+        let (pixelValues, frames) = try QwenVL.patchify(
+            images: [imageArray], 
+            mergeSize: config.visionConfiguration.spatialMergeSize, 
+            patchSize: config.visionConfiguration.patchSize,
+            temporalPatchSize: config.visionConfiguration.temporalPatchSize
+        )
+        
+        // Convert to the correct data type for the patch embed
+        let dtype = visionModel.patchEmbed.proj.weight.dtype
+        let typedPixelValues = pixelValues.asType(dtype)
+        
+        // Apply patch embedding: var hiddenStates = patchEmbed(hiddenStates)
+        let hiddenStates = visionModel.patchEmbed(typedPixelValues)
+        
+        // Print the dimensions of the hidden states
+        print("Hidden states dimensions: \(hiddenStates.shape)")
+        
+        return hiddenStates
+    }
+
 }
 
 // MARK: - Configuration
