@@ -25,6 +25,7 @@ struct ContentView: View {
     @State var llm = VLMEvaluator()
     @Environment(DeviceStat.self) private var deviceStat
     @State private var sceneThreshold: Float = 0.05
+    @State private var minSceneDuration: Float = 2.0
 
     @State private var selectedImage: PlatformImage? = nil {
         didSet {
@@ -277,6 +278,56 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        
+                        Divider()
+                            .padding(.vertical, 8)
+                        
+                        Text("Min Scene Duration: \(String(format: "%.1f", minSceneDuration))s")
+                            .font(.title2)
+                            .fontWeight(.medium)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                if minSceneDuration > 0.5 {
+                                    minSceneDuration = max(0.5, minSceneDuration - 0.5)
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || minSceneDuration <= 0.5)
+                            
+                            VStack(spacing: 4) {
+                                Text("Current Value")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.1f", minSceneDuration))
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                            }
+                            
+                            Button(action: {
+                                if minSceneDuration < 10.0 {
+                                    minSceneDuration = min(10.0, minSceneDuration + 0.5)
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || minSceneDuration >= 10.0)
+                        }
+                        
+                        VStack(spacing: 4) {
+                            Text("Range: 0.5s - 10.0s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Step: 0.5s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .padding()
                     .background(Color.secondary.opacity(0.1))
@@ -473,7 +524,7 @@ struct ContentView: View {
     private func detectSceneChanges() {
         Task {
             if let videoURL = selectedVideoURL {
-                llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold)
+                llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold, minSceneDuration: minSceneDuration)
             }
         }
     }
@@ -913,16 +964,16 @@ class VLMEvaluator {
         }
     }
     
-    func detectSceneChanges(videoURL: URL, threshold: Float) {
+    func detectSceneChanges(videoURL: URL, threshold: Float, minSceneDuration: Float) {
         guard !running else { return }
         generationTask = Task {
             running = true
-            await detectSceneChangesAsync(videoURL: videoURL, threshold: threshold)
+            await detectSceneChangesAsync(videoURL: videoURL, threshold: threshold, minSceneDuration: minSceneDuration)
             running = false
         }
     }
     
-    private func detectSceneChangesAsync(videoURL: URL, threshold: Float) async {
+    private func detectSceneChangesAsync(videoURL: URL, threshold: Float, minSceneDuration: Float) async {
         self.output = ""
         
         do {
@@ -938,33 +989,37 @@ class VLMEvaluator {
                 }
                 
                 let startTime = Date()
-                let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, processorConfig: processorConfig)
+                let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), processorConfig: processorConfig)
                 let endTime = Date()
                 let duration = endTime.timeIntervalSince(startTime)
                 
                 var output = "Scene Change Detection Results:\n"
                 output += "Threshold: \(String(format: "%.2f", threshold))\n"
+                output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
                 output += "Total scenes detected: \(sceneChanges.count)\n"
                 output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
                 
                 output += "Scene boundaries:\n"
-                for (sceneIndex, frameIndex) in sceneChanges.enumerated() {
-                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex)\n"
+                for (sceneIndex, (frameIndex, timestamp)) in sceneChanges.enumerated() {
+                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex) (\(String(format: "%.1f", timestamp))s)\n"
                 }
                 
                 // Calculate scene durations if we have multiple scenes
                 if sceneChanges.count > 1 {
-                    output += "\nScene durations (in frames):\n"
+                    output += "\nScene durations:\n"
                     for i in 0..<(sceneChanges.count - 1) {
-                        let startFrame = sceneChanges[i]
-                        let endFrame = sceneChanges[i + 1] - 1
-                        let duration = endFrame - startFrame + 1
-                        output += "Scene \(i + 1): \(duration) frames (frames \(startFrame)-\(endFrame))\n"
+                        let startFrame = sceneChanges[i].frameIndex
+                        let startTime = sceneChanges[i].timestamp
+                        let endFrame = sceneChanges[i + 1].frameIndex - 1
+                        let endTime = sceneChanges[i + 1].timestamp - 0.5 // Subtract 0.5s since we're at 2 FPS
+                        let frameDuration = endFrame - startFrame + 1
+                        let timeDuration = endTime - startTime
+                        output += "Scene \(i + 1): \(frameDuration) frames (\(String(format: "%.1f", timeDuration))s) - frames \(startFrame)-\(endFrame) (\(String(format: "%.1f", startTime))s-\(String(format: "%.1f", endTime))s)\n"
                     }
                     
                     // Last scene duration
                     let lastSceneStart = sceneChanges.last!
-                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart) to end\n"
+                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart.frameIndex) (\(String(format: "%.1f", lastSceneStart.timestamp))s) to end\n"
                 }
                 
                 return output

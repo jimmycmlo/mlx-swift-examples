@@ -1097,9 +1097,10 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
     public func detectSceneChanges(
         from videoURL: URL,
         threshold: Float = 0.1,
+        minSceneDuration: TimeInterval = 2.0, // Minimum scene duration in seconds
         processing: UserInput.Processing? = nil,
         processorConfig: Qwen2VLProcessorConfiguration
-    ) async throws -> [Int] {
+    ) async throws -> [(frameIndex: Int, timestamp: TimeInterval)] {
         let startTime = Date()
         
         // Extract CIImage frames from video at 2 FPS for scene detection
@@ -1109,6 +1110,7 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         )
         
         var frameEmbeddings: [MLXArray] = []
+        var frameTimestamps: [TimeInterval] = []
         
         // Process each frame
         for (index, frameImage) in ciImages.enumerated() {
@@ -1121,30 +1123,42 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
             )
             
             frameEmbeddings.append(frameEmbedding)
+            
+            // Calculate timestamp for this frame (2 FPS = 0.5 seconds per frame)
+            let timestamp = TimeInterval(index) * 0.5
+            frameTimestamps.append(timestamp)
         }
         
         guard !frameEmbeddings.isEmpty else {
             throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
         }
         
-        var sceneChanges: [Int] = [0] // Always include frame 0 as first scene
+        var sceneChanges: [(frameIndex: Int, timestamp: TimeInterval)] = [(0, 0.0)] // Always include frame 0 as first scene
         var currentReferenceEmbedding = frameEmbeddings[0]
         
-        print("Scene change detection with threshold: \(threshold)")
-        print("Frame 0: Starting new scene (reference frame)")
+        print("Scene change detection with threshold: \(threshold), min scene duration: \(minSceneDuration)s")
+        print("Frame 0 (0.0s): Starting new scene (reference frame)")
         
         // Analyze each frame starting from frame 1
         for frameIndex in 1..<frameEmbeddings.count {
             let currentEmbedding = frameEmbeddings[frameIndex]
             let distance = cosineDistance(currentReferenceEmbedding, currentEmbedding)
+            let timestamp = frameTimestamps[frameIndex]
             
-            print("Frame \(frameIndex): distance to reference = \(String(format: "%.4f", distance))")
+            print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): distance to reference = \(String(format: "%.4f", distance))")
             
             if distance > threshold {
-                // Scene change detected (distance exceeds threshold)
-                sceneChanges.append(frameIndex)
-                currentReferenceEmbedding = currentEmbedding
-                print("Frame \(frameIndex): SCENE CHANGE DETECTED - Starting new scene")
+                // Check if enough time has passed since the last scene change
+                let timeSinceLastScene = timestamp - sceneChanges.last!.timestamp
+                
+                if timeSinceLastScene >= minSceneDuration {
+                    // Scene change detected (distance exceeds threshold and minimum duration met)
+                    sceneChanges.append((frameIndex: frameIndex, timestamp: timestamp))
+                    currentReferenceEmbedding = currentEmbedding
+                    print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE DETECTED - Starting new scene (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
+                } else {
+                    print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): Scene change ignored - too short (duration: \(String(format: "%.1f", timeSinceLastScene))s < \(minSceneDuration)s)")
+                }
             }
         }
         
@@ -1153,7 +1167,10 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         
         print("Scene change detection complete!")
         print("Total scenes detected: \(sceneChanges.count)")
-        print("Scene changes at frames: \(sceneChanges)")
+        print("Scene changes at frames and timestamps:")
+        for (frameIndex, timestamp) in sceneChanges {
+            print("  Frame \(frameIndex): \(String(format: "%.1f", timestamp))s")
+        }
         print("Total processing time: \(String(format: "%.2f", duration)) seconds")
         print("Average time per frame: \(String(format: "%.3f", duration / Double(frameEmbeddings.count))) seconds")
         
