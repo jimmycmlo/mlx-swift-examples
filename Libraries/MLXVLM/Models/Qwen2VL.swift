@@ -882,10 +882,10 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         return pooledEmbeddings
     }
 
-    /// Calculate cosine similarity between two mean-pooled embeddings
+    /// Calculate cosine distance between two mean-pooled embeddings
     /// 
-    /// This function computes the cosine similarity between two 1D feature vectors
-    /// obtained from mean-pooled patch embeddings.
+    /// This function computes the cosine distance between two 1D feature vectors
+    /// obtained from mean-pooled patch embeddings. Cosine distance is 1 - cosine_similarity.
     /// 
     /// Example usage:
     /// ```swift
@@ -896,14 +896,14 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
     /// 
     /// let embedding1 = try model.extractAndPoolEmbeddings(from: image1, processorConfig: processorConfig)
     /// let embedding2 = try model.extractAndPoolEmbeddings(from: image2, processorConfig: processorConfig)
-    /// let similarity = model.cosineSimilarity(embedding1, embedding2)
-    /// // similarity is a value between -1 and 1, where 1 means identical
+    /// let distance = model.cosineDistance(embedding1, embedding2)
+    /// // distance is a value between 0 and 2, where 0 means identical
     /// ```
     /// 
     /// - Parameter embedding1: First 1D embedding vector
     /// - Parameter embedding2: Second 1D embedding vector
-    /// - Returns: Cosine similarity value between -1 and 1
-    public func cosineSimilarity(_ embedding1: MLXArray, _ embedding2: MLXArray) -> Float {
+    /// - Returns: Cosine distance value between 0 and 2
+    public func cosineDistance(_ embedding1: MLXArray, _ embedding2: MLXArray) -> Float {
         // Ensure both embeddings are 1D
         let vec1 = embedding1.flattened()
         let vec2 = embedding2.flattened()
@@ -915,12 +915,14 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         let magnitude1 = sqrt(sum(vec1 * vec1))
         let magnitude2 = sqrt(sum(vec2 * vec2))
         
-        // Calculate cosine similarity
+        // Calculate cosine similarity first
         let similarity = dotProduct / (magnitude1 * magnitude2)
         
-        // Convert to Float and handle potential NaN
-        let result = similarity.item() as Float
-        return result.isNaN ? 0.0 : result
+        // Convert to cosine distance (1 - similarity)
+        let distance = 1.0 - similarity.item() as Float
+        
+        // Handle potential NaN
+        return distance.isNaN ? 2.0 : distance
     }
 
     /// Extract patch embeddings from a video by processing each frame
@@ -1021,26 +1023,26 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         return frameEmbeddings
     }
 
-    /// Calculate cosine similarity between each frame and the first frame as reference
+    /// Calculate cosine distance between each frame and the first frame as reference
     /// 
     /// This function extracts mean-pooled embeddings from each frame of a video
-    /// and calculates cosine similarity between each frame and the first frame.
+    /// and calculates cosine distance between each frame and the first frame.
     /// 
     /// Example usage:
     /// ```swift
     /// let model = Qwen2VL(config)
     /// let processorConfig = Qwen2VLProcessorConfiguration(...)
     /// let videoURL = URL(fileURLWithPath: "video.mp4")
-    /// let similarities = try model.calculateVideoFrameSimilarities(from: videoURL, processorConfig: processorConfig)
-    /// // similarities is an array of Float values, one for each frame
+    /// let distances = try model.calculateVideoFrameDistances(from: videoURL, processorConfig: processorConfig)
+    /// // distances is an array of Float values, one for each frame
     /// ```
     /// 
     /// - Parameter videoURL: The URL of the video file
     /// - Parameter processing: Optional processing parameters for resizing, etc.
     /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
-    /// - Returns: Array of cosine similarity values for each frame (first frame will be 1.0)
+    /// - Returns: Array of cosine distance values for each frame (first frame will be 0.0)
     /// - Throws: VLMError if video processing fails
-    public func calculateVideoFrameSimilarities(
+    public func calculateVideoFrameDistances(
         from videoURL: URL,
         processing: UserInput.Processing? = nil,
         processorConfig: Qwen2VLProcessorConfiguration
@@ -1059,22 +1061,22 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         let referenceEmbedding = frameEmbeddings[0]
         var similarities: [Float] = []
         
-        // Calculate similarity between each frame and the reference frame
+        // Calculate distance between each frame and the reference frame
         for (index, frameEmbedding) in frameEmbeddings.enumerated() {
-            let similarity = cosineSimilarity(referenceEmbedding, frameEmbedding)
-            similarities.append(similarity)
+            let distance = cosineDistance(referenceEmbedding, frameEmbedding)
+            similarities.append(distance)
             
-            print("Frame \(index + 1) similarity to reference: \(similarity)")
+            print("Frame \(index + 1) distance to reference: \(distance)")
         }
         
         print("Successfully calculated similarities for \(similarities.count) frames")
         return similarities
     }
 
-    /// Detect scene changes in a video using cosine similarity threshold
+    /// Detect scene changes in a video using cosine distance threshold
     /// 
     /// This function analyzes each frame of a video and detects scene changes
-    /// by comparing each frame to a reference frame. When similarity drops below
+    /// by comparing each frame to a reference frame. When distance exceeds
     /// the threshold, it marks a scene change and updates the reference frame.
     /// 
     /// Example usage:
@@ -1082,22 +1084,24 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
     /// let model = Qwen2VL(config)
     /// let processorConfig = Qwen2VLProcessorConfiguration(...)
     /// let videoURL = URL(fileURLWithPath: "video.mp4")
-    /// let sceneChanges = try model.detectSceneChanges(from: videoURL, threshold: 0.9, processorConfig: processorConfig)
+    /// let sceneChanges = try model.detectSceneChanges(from: videoURL, threshold: 0.1, processorConfig: processorConfig)
     /// // sceneChanges contains frame indices where scene changes occur
     /// ```
     /// 
     /// - Parameter videoURL: The URL of the video file
-    /// - Parameter threshold: Cosine similarity threshold for scene change detection (default: 0.9)
+    /// - Parameter threshold: Cosine distance threshold for scene change detection (default: 0.1)
     /// - Parameter processing: Optional processing parameters for resizing, etc.
     /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
     /// - Returns: Array of frame indices where scene changes occur (including frame 0)
     /// - Throws: VLMError if video processing fails
     public func detectSceneChanges(
         from videoURL: URL,
-        threshold: Float = 0.9,
+        threshold: Float = 0.1,
         processing: UserInput.Processing? = nil,
         processorConfig: Qwen2VLProcessorConfiguration
     ) async throws -> [Int] {
+        let startTime = Date()
+        
         // Extract mean-pooled embeddings from each frame
         let frameEmbeddings = try await extractAndPoolVideoEmbeddings(
             from: videoURL,
@@ -1118,21 +1122,26 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         // Analyze each frame starting from frame 1
         for frameIndex in 1..<frameEmbeddings.count {
             let currentEmbedding = frameEmbeddings[frameIndex]
-            let similarity = cosineSimilarity(currentReferenceEmbedding, currentEmbedding)
+            let distance = cosineDistance(currentReferenceEmbedding, currentEmbedding)
             
-            print("Frame \(frameIndex): similarity to reference = \(String(format: "%.4f", similarity))")
+            print("Frame \(frameIndex): distance to reference = \(String(format: "%.4f", distance))")
             
-            if similarity < threshold {
-                // Scene change detected
+            if distance > threshold {
+                // Scene change detected (distance exceeds threshold)
                 sceneChanges.append(frameIndex)
                 currentReferenceEmbedding = currentEmbedding
                 print("Frame \(frameIndex): SCENE CHANGE DETECTED - Starting new scene")
             }
         }
         
+        let endTime = Date()
+        let duration = endTime.timeIntervalSince(startTime)
+        
         print("Scene change detection complete!")
         print("Total scenes detected: \(sceneChanges.count)")
         print("Scene changes at frames: \(sceneChanges)")
+        print("Total processing time: \(String(format: "%.2f", duration)) seconds")
+        print("Average time per frame: \(String(format: "%.3f", duration / Double(frameEmbeddings.count))) seconds")
         
         return sceneChanges
     }

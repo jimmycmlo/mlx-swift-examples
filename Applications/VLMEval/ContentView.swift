@@ -24,7 +24,7 @@ struct ContentView: View {
 
     @State var llm = VLMEvaluator()
     @Environment(DeviceStat.self) private var deviceStat
-    @State private var sceneThreshold: Float = 0.9
+    @State private var sceneThreshold: Float = 0.05
 
     @State private var selectedImage: PlatformImage? = nil {
         didSet {
@@ -237,15 +237,15 @@ struct ContentView: View {
                         
                         HStack(spacing: 20) {
                             Button(action: {
-                                if sceneThreshold > 0.7 {
-                                    sceneThreshold = max(0.7, sceneThreshold - 0.01)
+                                if sceneThreshold > 0.01 {
+                                    sceneThreshold = max(0.01, sceneThreshold - 0.01)
                                 }
                             }) {
                                 Image(systemName: "minus.circle.fill")
                                     .font(.title)
                                     .foregroundColor(.blue)
                             }
-                            .disabled(llm.running || sceneThreshold <= 0.7)
+                            .disabled(llm.running || sceneThreshold <= 0.01)
                             
                             VStack(spacing: 4) {
                                 Text("Current Value")
@@ -258,19 +258,19 @@ struct ContentView: View {
                             }
                             
                             Button(action: {
-                                if sceneThreshold < 0.99 {
-                                    sceneThreshold = min(0.99, sceneThreshold + 0.01)
+                                if sceneThreshold < 0.5 {
+                                    sceneThreshold = min(0.5, sceneThreshold + 0.01)
                                 }
                             }) {
                                 Image(systemName: "plus.circle.fill")
                                     .font(.title)
                                     .foregroundColor(.blue)
                             }
-                            .disabled(llm.running || sceneThreshold >= 0.99)
+                            .disabled(llm.running || sceneThreshold >= 0.5)
                         }
                         
                         VStack(spacing: 4) {
-                            Text("Range: 0.70 - 0.99")
+                            Text("Range: 0.01 - 0.50")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("Step: 0.01")
@@ -770,10 +770,10 @@ class VLMEvaluator {
                 // For now, we'll compare with the same image to test the function
                 let referenceEmbedding = try qwen2VL.extractAndPoolEmbeddings(from: image, processorConfig: processorConfig)
                 
-                // Calculate cosine similarity
-                let similarity = qwen2VL.cosineSimilarity(currentEmbedding, referenceEmbedding)
+                // Calculate cosine distance
+                let distance = qwen2VL.cosineDistance(currentEmbedding, referenceEmbedding)
                 
-                return "Cosine similarity: \(similarity)\nCurrent embedding shape: \(currentEmbedding.shape)\nReference embedding shape: \(referenceEmbedding.shape)"
+                return "Cosine distance: \(distance)\nCurrent embedding shape: \(currentEmbedding.shape)\nReference embedding shape: \(referenceEmbedding.shape)"
             }
             
             self.output = result
@@ -886,23 +886,23 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
-                let similarities = try await qwen2VL.calculateVideoFrameSimilarities(from: videoURL, processorConfig: processorConfig)
+                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, processorConfig: processorConfig)
                 
-                var output = "Cosine similarities to reference frame (Frame 1):\n"
-                for (index, similarity) in similarities.enumerated() {
-                    output += "Frame \(index + 1): \(String(format: "%.4f", similarity))\n"
+                var output = "Cosine distances to reference frame (Frame 1):\n"
+                for (index, distance) in distances.enumerated() {
+                    output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
                 }
                 
                 // Add summary statistics
-                let minSimilarity = similarities.min() ?? 0.0
-                let maxSimilarity = similarities.max() ?? 0.0
-                let avgSimilarity = similarities.reduce(0, +) / Float(similarities.count)
+                let minDistance = distances.min() ?? 0.0
+                let maxDistance = distances.max() ?? 0.0
+                let avgDistance = distances.reduce(0, +) / Float(distances.count)
                 
                 output += "\nSummary:\n"
-                output += "Min similarity: \(String(format: "%.4f", minSimilarity))\n"
-                output += "Max similarity: \(String(format: "%.4f", maxSimilarity))\n"
-                output += "Average similarity: \(String(format: "%.4f", avgSimilarity))\n"
-                output += "Total frames: \(similarities.count)\n"
+                output += "Min distance: \(String(format: "%.4f", minDistance))\n"
+                output += "Max distance: \(String(format: "%.4f", maxDistance))\n"
+                output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
+                output += "Total frames: \(distances.count)\n"
                 
                 return output
             }
@@ -937,11 +937,15 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
+                let startTime = Date()
                 let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, processorConfig: processorConfig)
+                let endTime = Date()
+                let duration = endTime.timeIntervalSince(startTime)
                 
                 var output = "Scene Change Detection Results:\n"
                 output += "Threshold: \(String(format: "%.2f", threshold))\n"
-                output += "Total scenes detected: \(sceneChanges.count)\n\n"
+                output += "Total scenes detected: \(sceneChanges.count)\n"
+                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
                 
                 output += "Scene boundaries:\n"
                 for (sceneIndex, frameIndex) in sceneChanges.enumerated() {
