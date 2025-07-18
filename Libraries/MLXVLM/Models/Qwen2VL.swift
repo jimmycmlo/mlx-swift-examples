@@ -2,6 +2,7 @@
 
 // port of https://github.com/Blaizzy/mlx-vlm/tree/main/mlx_vlm/models/qwen2_vl
 
+import AVFoundation
 import CoreImage
 import Foundation
 import Hub
@@ -920,6 +921,154 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         // Convert to Float and handle potential NaN
         let result = similarity.item() as Float
         return result.isNaN ? 0.0 : result
+    }
+
+    /// Extract patch embeddings from a video by processing each frame
+    /// 
+    /// This function processes each frame of a video, extracts patch embeddings,
+    /// and returns an array of patch embeddings for each frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let frameEmbeddings = try model.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
+    /// // frameEmbeddings is an array of MLXArray, one for each frame
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of patch embeddings for each frame
+    /// - Throws: VLMError if video processing fails
+    public func extractVideoPatchEmbeddings(
+        from videoURL: URL,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [MLXArray] {
+        // Extract CIImage frames from video
+        let ciImages = try await MediaProcessing.asCIImageSequence(
+            AVAsset(url: videoURL), 
+            samplesPerSecond: Int(processorConfig.fps)
+        )
+        
+        var frameEmbeddings: [MLXArray] = []
+        
+        // Process each frame
+        for (index, frameImage) in ciImages.enumerated() {
+            print("Processing frame \(index + 1)/\(ciImages.count)")
+            
+            let frameEmbedding = try extractPatchEmbeddings(
+                from: frameImage,
+                processing: processing,
+                processorConfig: processorConfig
+            )
+            
+            frameEmbeddings.append(frameEmbedding)
+        }
+        
+        print("Successfully extracted patch embeddings for \(frameEmbeddings.count) frames")
+        return frameEmbeddings
+    }
+
+    /// Extract and mean-pool embeddings from a video by processing each frame
+    /// 
+    /// This function processes each frame of a video, extracts patch embeddings,
+    /// mean-pools them, and returns an array of 1D feature vectors for each frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let frameEmbeddings = try model.extractAndPoolVideoEmbeddings(from: videoURL, processorConfig: processorConfig)
+    /// // frameEmbeddings is an array of 1D MLXArray, one for each frame
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of mean-pooled embeddings for each frame
+    /// - Throws: VLMError if video processing fails
+    public func extractAndPoolVideoEmbeddings(
+        from videoURL: URL,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [MLXArray] {
+        // Extract CIImage frames from video
+        let ciImages = try await MediaProcessing.asCIImageSequence(
+            AVAsset(url: videoURL), 
+            samplesPerSecond: Int(processorConfig.fps)
+        )
+        
+        var frameEmbeddings: [MLXArray] = []
+        
+        // Process each frame
+        for (index, frameImage) in ciImages.enumerated() {
+            print("Processing frame \(index + 1)/\(ciImages.count)")
+            
+            let frameEmbedding = try extractAndPoolEmbeddings(
+                from: frameImage,
+                processing: processing,
+                processorConfig: processorConfig
+            )
+            
+            frameEmbeddings.append(frameEmbedding)
+        }
+        
+        print("Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames")
+        return frameEmbeddings
+    }
+
+    /// Calculate cosine similarity between each frame and the first frame as reference
+    /// 
+    /// This function extracts mean-pooled embeddings from each frame of a video
+    /// and calculates cosine similarity between each frame and the first frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let similarities = try model.calculateVideoFrameSimilarities(from: videoURL, processorConfig: processorConfig)
+    /// // similarities is an array of Float values, one for each frame
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of cosine similarity values for each frame (first frame will be 1.0)
+    /// - Throws: VLMError if video processing fails
+    public func calculateVideoFrameSimilarities(
+        from videoURL: URL,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [Float] {
+        // Extract mean-pooled embeddings from each frame
+        let frameEmbeddings = try await extractAndPoolVideoEmbeddings(
+            from: videoURL,
+            processing: processing,
+            processorConfig: processorConfig
+        )
+        
+        guard !frameEmbeddings.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
+        }
+        
+        let referenceEmbedding = frameEmbeddings[0]
+        var similarities: [Float] = []
+        
+        // Calculate similarity between each frame and the reference frame
+        for (index, frameEmbedding) in frameEmbeddings.enumerated() {
+            let similarity = cosineSimilarity(referenceEmbedding, frameEmbedding)
+            similarities.append(similarity)
+            
+            print("Frame \(index + 1) similarity to reference: \(similarity)")
+        }
+        
+        print("Successfully calculated similarities for \(similarities.count) frames")
+        return similarities
     }
 
 }

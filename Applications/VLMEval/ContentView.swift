@@ -213,6 +213,12 @@ struct ContentView: View {
                     .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
                 Button("Compare Similarity", action: compareSimilarity)
                     .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
+                Button("Video Patches", action: extractVideoPatches)
+                    .disabled(llm.running || selectedVideoURL == nil)
+                Button("Video Mean Pool", action: videoMeanPool)
+                    .disabled(llm.running || selectedVideoURL == nil)
+                Button("Video Similarity", action: calculateVideoSimilarity)
+                    .disabled(llm.running || selectedVideoURL == nil)
             }
         }
         .onAppear {
@@ -372,6 +378,30 @@ struct ContentView: View {
                 } catch {
                     print("Failed to load image: \(error.localizedDescription)")
                 }
+            }
+        }
+    }
+    
+    private func extractVideoPatches() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                llm.extractVideoPatches(videoURL: videoURL)
+            }
+        }
+    }
+    
+    private func videoMeanPool() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                llm.videoMeanPool(videoURL: videoURL)
+            }
+        }
+    }
+    
+    private func calculateVideoSimilarity() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                llm.calculateVideoSimilarity(videoURL: videoURL)
             }
         }
     }
@@ -677,6 +707,137 @@ class VLMEvaluator {
             self.output = result
         } catch {
             self.output = "Failed to compare similarity: \(error)"
+        }
+    }
+    
+    func extractVideoPatches(videoURL: URL) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await extractVideoPatchesAsync(videoURL: videoURL)
+            running = false
+        }
+    }
+    
+    private func extractVideoPatchesAsync(videoURL: URL) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let frameEmbeddings = try await qwen2VL.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
+                
+                var output = "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
+                for (index, embedding) in frameEmbeddings.enumerated() {
+                    output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to extract video patches: \(error)"
+        }
+    }
+    
+    func videoMeanPool(videoURL: URL) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await videoMeanPoolAsync(videoURL: videoURL)
+            running = false
+        }
+    }
+    
+    private func videoMeanPoolAsync(videoURL: URL) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, processorConfig: processorConfig)
+                
+                var output = "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
+                for (index, embedding) in frameEmbeddings.enumerated() {
+                    output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to video mean pool: \(error)"
+        }
+    }
+    
+    func calculateVideoSimilarity(videoURL: URL) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await calculateVideoSimilarityAsync(videoURL: videoURL)
+            running = false
+        }
+    }
+    
+    private func calculateVideoSimilarityAsync(videoURL: URL) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let similarities = try await qwen2VL.calculateVideoFrameSimilarities(from: videoURL, processorConfig: processorConfig)
+                
+                var output = "Cosine similarities to reference frame (Frame 1):\n"
+                for (index, similarity) in similarities.enumerated() {
+                    output += "Frame \(index + 1): \(String(format: "%.4f", similarity))\n"
+                }
+                
+                // Add summary statistics
+                let minSimilarity = similarities.min() ?? 0.0
+                let maxSimilarity = similarities.max() ?? 0.0
+                let avgSimilarity = similarities.reduce(0, +) / Float(similarities.count)
+                
+                output += "\nSummary:\n"
+                output += "Min similarity: \(String(format: "%.4f", minSimilarity))\n"
+                output += "Max similarity: \(String(format: "%.4f", maxSimilarity))\n"
+                output += "Average similarity: \(String(format: "%.4f", avgSimilarity))\n"
+                output += "Total frames: \(similarities.count)\n"
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to calculate video similarities: \(error)"
         }
     }
 }
