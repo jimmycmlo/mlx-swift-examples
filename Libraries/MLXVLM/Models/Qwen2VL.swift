@@ -1071,6 +1071,72 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         return similarities
     }
 
+    /// Detect scene changes in a video using cosine similarity threshold
+    /// 
+    /// This function analyzes each frame of a video and detects scene changes
+    /// by comparing each frame to a reference frame. When similarity drops below
+    /// the threshold, it marks a scene change and updates the reference frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let sceneChanges = try model.detectSceneChanges(from: videoURL, threshold: 0.9, processorConfig: processorConfig)
+    /// // sceneChanges contains frame indices where scene changes occur
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter threshold: Cosine similarity threshold for scene change detection (default: 0.9)
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of frame indices where scene changes occur (including frame 0)
+    /// - Throws: VLMError if video processing fails
+    public func detectSceneChanges(
+        from videoURL: URL,
+        threshold: Float = 0.9,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [Int] {
+        // Extract mean-pooled embeddings from each frame
+        let frameEmbeddings = try await extractAndPoolVideoEmbeddings(
+            from: videoURL,
+            processing: processing,
+            processorConfig: processorConfig
+        )
+        
+        guard !frameEmbeddings.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
+        }
+        
+        var sceneChanges: [Int] = [0] // Always include frame 0 as first scene
+        var currentReferenceEmbedding = frameEmbeddings[0]
+        
+        print("Scene change detection with threshold: \(threshold)")
+        print("Frame 0: Starting new scene (reference frame)")
+        
+        // Analyze each frame starting from frame 1
+        for frameIndex in 1..<frameEmbeddings.count {
+            let currentEmbedding = frameEmbeddings[frameIndex]
+            let similarity = cosineSimilarity(currentReferenceEmbedding, currentEmbedding)
+            
+            print("Frame \(frameIndex): similarity to reference = \(String(format: "%.4f", similarity))")
+            
+            if similarity < threshold {
+                // Scene change detected
+                sceneChanges.append(frameIndex)
+                currentReferenceEmbedding = currentEmbedding
+                print("Frame \(frameIndex): SCENE CHANGE DETECTED - Starting new scene")
+            }
+        }
+        
+        print("Scene change detection complete!")
+        print("Total scenes detected: \(sceneChanges.count)")
+        print("Scene changes at frames: \(sceneChanges)")
+        
+        return sceneChanges
+    }
+
 }
 
 // MARK: - Configuration

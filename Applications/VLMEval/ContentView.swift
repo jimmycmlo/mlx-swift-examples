@@ -24,6 +24,7 @@ struct ContentView: View {
 
     @State var llm = VLMEvaluator()
     @Environment(DeviceStat.self) private var deviceStat
+    @State private var sceneThreshold: Float = 0.9
 
     @State private var selectedImage: PlatformImage? = nil {
         didSet {
@@ -219,6 +220,69 @@ struct ContentView: View {
                     .disabled(llm.running || selectedVideoURL == nil)
                 Button("Video Similarity", action: calculateVideoSimilarity)
                     .disabled(llm.running || selectedVideoURL == nil)
+                Button("Scene Detection", action: detectSceneChanges)
+                    .disabled(llm.running || selectedVideoURL == nil)
+            }
+            
+            if selectedVideoURL != nil {
+                VStack(spacing: 16) {
+                    Text("Scene Change Detection Settings")
+                        .font(.headline)
+                        .padding(.top)
+                    
+                    VStack(alignment: .center, spacing: 12) {
+                        Text("Threshold: \(String(format: "%.2f", sceneThreshold))")
+                            .font(.title2)
+                            .fontWeight(.medium)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                if sceneThreshold > 0.7 {
+                                    sceneThreshold = max(0.7, sceneThreshold - 0.01)
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || sceneThreshold <= 0.7)
+                            
+                            VStack(spacing: 4) {
+                                Text("Current Value")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.2f", sceneThreshold))
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                            }
+                            
+                            Button(action: {
+                                if sceneThreshold < 0.99 {
+                                    sceneThreshold = min(0.99, sceneThreshold + 0.01)
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || sceneThreshold >= 0.99)
+                        }
+                        
+                        VStack(spacing: 4) {
+                            Text("Range: 0.70 - 0.99")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Step: 0.01")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding()
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                }
             }
         }
         .onAppear {
@@ -402,6 +466,14 @@ struct ContentView: View {
         Task {
             if let videoURL = selectedVideoURL {
                 llm.calculateVideoSimilarity(videoURL: videoURL)
+            }
+        }
+    }
+    
+    private func detectSceneChanges() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold)
             }
         }
     }
@@ -838,6 +910,65 @@ class VLMEvaluator {
             self.output = result
         } catch {
             self.output = "Failed to calculate video similarities: \(error)"
+        }
+    }
+    
+    func detectSceneChanges(videoURL: URL, threshold: Float) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await detectSceneChangesAsync(videoURL: videoURL, threshold: threshold)
+            running = false
+        }
+    }
+    
+    private func detectSceneChangesAsync(videoURL: URL, threshold: Float) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, processorConfig: processorConfig)
+                
+                var output = "Scene Change Detection Results:\n"
+                output += "Threshold: \(String(format: "%.2f", threshold))\n"
+                output += "Total scenes detected: \(sceneChanges.count)\n\n"
+                
+                output += "Scene boundaries:\n"
+                for (sceneIndex, frameIndex) in sceneChanges.enumerated() {
+                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex)\n"
+                }
+                
+                // Calculate scene durations if we have multiple scenes
+                if sceneChanges.count > 1 {
+                    output += "\nScene durations (in frames):\n"
+                    for i in 0..<(sceneChanges.count - 1) {
+                        let startFrame = sceneChanges[i]
+                        let endFrame = sceneChanges[i + 1] - 1
+                        let duration = endFrame - startFrame + 1
+                        output += "Scene \(i + 1): \(duration) frames (frames \(startFrame)-\(endFrame))\n"
+                    }
+                    
+                    // Last scene duration
+                    let lastSceneStart = sceneChanges.last!
+                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart) to end\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to detect scene changes: \(error)"
         }
     }
 }
