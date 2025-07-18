@@ -549,6 +549,7 @@ public class Qwen2VLProcessor: UserInputProcessor {
             minPixels: config.minPixels, maxPixels: config.maxPixels)
         let resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
         print("resizedWidth: \(resizedSize.width), resizedHeight: \(resizedSize.height)")
+        print("patcheSize: \(config.patchSize), mergeSize: \(config.mergeSize), minPixels: \(config.minPixels), maxPixels: \(config.maxPixels)")
 
         let processedImages = try images.map { image in
             preprocess(image: image, resizedSize: resizedSize).asMLXArray()
@@ -748,18 +749,21 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
     /// Example usage:
     /// ```swift
     /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
     /// let image = CIImage(contentsOf: imageURL)!
-    /// let patchEmbeddings = try model.extractPatchEmbeddings(from: image)
+    /// let patchEmbeddings = try model.extractPatchEmbeddings(from: image, processorConfig: processorConfig)
     /// // patchEmbeddings shape: [numPatches, embedDimensions]
     /// ```
     /// 
     /// - Parameter image: The input image as a CIImage
     /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
     /// - Returns: The patch embeddings as an MLXArray
     /// - Throws: VLMError if image processing fails
     public func extractPatchEmbeddings(
         from image: CIImage, 
-        processing: UserInput.Processing? = nil
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
     ) throws -> MLXArray {
         // Apply user processing if provided
         let processedImage = MediaProcessing.apply(image, processing: processing)
@@ -768,10 +772,13 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         let size = processedImage.extent.size
         let (resizedHeight, resizedWidth) = try QwenVL.targetSize(
             height: Int(size.height), width: Int(size.width),
-            factor: config.visionConfiguration.patchSize * config.visionConfiguration.spatialMergeSize,
-            minPixels: 3136, maxPixels: 12_845_056)
+            factor: processorConfig.patchSize * processorConfig.mergeSize,
+            minPixels: processorConfig.minPixels, maxPixels: processorConfig.maxPixels)
+
         let resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
-        
+        print("Resized size: \(resizedSize)")
+        print("patcheSize: \(processorConfig.patchSize), mergeSize: \(processorConfig.mergeSize), minPixels: \(processorConfig.minPixels), maxPixels: \(processorConfig.maxPixels)")
+
         // Preprocess the image (resize, normalize)
         let normalizedImage = processedImage
             .toSRGB()
@@ -784,9 +791,9 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         // Patchify the image
         let (pixelValues, frames) = try QwenVL.patchify(
             images: [imageArray], 
-            mergeSize: config.visionConfiguration.spatialMergeSize, 
-            patchSize: config.visionConfiguration.patchSize,
-            temporalPatchSize: config.visionConfiguration.temporalPatchSize
+            mergeSize: processorConfig.mergeSize, 
+            patchSize: processorConfig.patchSize,
+            temporalPatchSize: processorConfig.temporalPatchSize
         )
         
         // Convert to the correct data type for the patch embed

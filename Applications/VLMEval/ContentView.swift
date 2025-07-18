@@ -207,6 +207,8 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                     #endif
                 Button(llm.running ? "stop" : "generate", action: llm.running ? cancel : generate)
+                Button("Extract Patches", action: extractPatches)
+                    .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
             }
         }
         .onAppear {
@@ -287,6 +289,33 @@ struct ContentView: View {
 
     private func cancel() {
         llm.cancelGeneration()
+    }
+    
+    private func extractPatches() {
+        Task {
+            if let selectedImage = selectedImage {
+                #if os(iOS) || os(visionOS)
+                    let ciImage = CIImage(image: selectedImage)
+                    llm.extractPatches(image: ciImage ?? CIImage())
+                #else
+                    if let cgImage = selectedImage.cgImage(
+                        forProposedRect: nil, context: nil, hints: nil)
+                    {
+                        let ciImage = CIImage(cgImage: cgImage)
+                        llm.extractPatches(image: ciImage)
+                    }
+                #endif
+            } else if let imageURL = currentImageURL {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: imageURL)
+                    if let ciImage = CIImage(data: data) {
+                        llm.extractPatches(image: ciImage)
+                    }
+                } catch {
+                    print("Failed to load image: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     #if os(macOS)
@@ -480,6 +509,40 @@ class VLMEvaluator {
     func cancelGeneration() {
         generationTask?.cancel()
         running = false
+    }
+    
+    func extractPatches(image: CIImage) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await extractPatchesAsync(image: image)
+            running = false
+        }
+    }
+    
+    private func extractPatchesAsync(image: CIImage) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result =             try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let patchEmbeddings = try qwen2VL.extractPatchEmbeddings(from: image, processorConfig: processorConfig)
+                return "Successfully extracted patch embeddings with shape: \(patchEmbeddings.shape)"
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to extract patches: \(error)"
+        }
     }
 }
 
