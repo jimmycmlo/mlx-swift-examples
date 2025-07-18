@@ -209,6 +209,10 @@ struct ContentView: View {
                 Button(llm.running ? "stop" : "generate", action: llm.running ? cancel : generate)
                 Button("Extract Patches", action: extractPatches)
                     .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
+                Button("Mean Pool", action: meanPool)
+                    .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
+                Button("Compare Similarity", action: compareSimilarity)
+                    .disabled(llm.running || (selectedImage == nil && currentImageURL == nil))
             }
         }
         .onAppear {
@@ -310,6 +314,60 @@ struct ContentView: View {
                     let (data, _) = try await URLSession.shared.data(from: imageURL)
                     if let ciImage = CIImage(data: data) {
                         llm.extractPatches(image: ciImage)
+                    }
+                } catch {
+                    print("Failed to load image: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func meanPool() {
+        Task {
+            if let selectedImage = selectedImage {
+                #if os(iOS) || os(visionOS)
+                    let ciImage = CIImage(image: selectedImage)
+                    llm.meanPool(image: ciImage ?? CIImage())
+                #else
+                    if let cgImage = selectedImage.cgImage(
+                        forProposedRect: nil, context: nil, hints: nil)
+                    {
+                        let ciImage = CIImage(cgImage: cgImage)
+                        llm.meanPool(image: ciImage)
+                    }
+                #endif
+            } else if let imageURL = currentImageURL {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: imageURL)
+                    if let ciImage = CIImage(data: data) {
+                        llm.meanPool(image: ciImage)
+                    }
+                } catch {
+                    print("Failed to load image: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func compareSimilarity() {
+        Task {
+            if let selectedImage = selectedImage {
+                #if os(iOS) || os(visionOS)
+                    let ciImage = CIImage(image: selectedImage)
+                    llm.compareSimilarity(image: ciImage ?? CIImage())
+                #else
+                    if let cgImage = selectedImage.cgImage(
+                        forProposedRect: nil, context: nil, hints: nil)
+                    {
+                        let ciImage = CIImage(cgImage: cgImage)
+                        llm.compareSimilarity(image: ciImage)
+                    }
+                #endif
+            } else if let imageURL = currentImageURL {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: imageURL)
+                    if let ciImage = CIImage(data: data) {
+                        llm.compareSimilarity(image: ciImage)
                     }
                 } catch {
                     print("Failed to load image: \(error.localizedDescription)")
@@ -542,6 +600,83 @@ class VLMEvaluator {
             self.output = result
         } catch {
             self.output = "Failed to extract patches: \(error)"
+        }
+    }
+    
+    func meanPool(image: CIImage) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await meanPoolAsync(image: image)
+            running = false
+        }
+    }
+    
+    private func meanPoolAsync(image: CIImage) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                let pooledEmbeddings = try qwen2VL.extractAndPoolEmbeddings(from: image, processorConfig: processorConfig)
+                return "Successfully extracted and mean-pooled embeddings with shape: \(pooledEmbeddings.shape)"
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to mean pool: \(error)"
+        }
+    }
+    
+    func compareSimilarity(image: CIImage) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await compareSimilarityAsync(image: image)
+            running = false
+        }
+    }
+    
+    private func compareSimilarityAsync(image: CIImage) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                    return "Error: Processor is not Qwen2VLProcessor"
+                }
+                
+                // Get embedding for the current image
+                let currentEmbedding = try qwen2VL.extractAndPoolEmbeddings(from: image, processorConfig: processorConfig)
+                
+                // Create a reference image (you can modify this to use a different reference)
+                // For now, we'll compare with the same image to test the function
+                let referenceEmbedding = try qwen2VL.extractAndPoolEmbeddings(from: image, processorConfig: processorConfig)
+                
+                // Calculate cosine similarity
+                let similarity = qwen2VL.cosineSimilarity(currentEmbedding, referenceEmbedding)
+                
+                return "Cosine similarity: \(similarity)\nCurrent embedding shape: \(currentEmbedding.shape)\nReference embedding shape: \(referenceEmbedding.shape)"
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to compare similarity: \(error)"
         }
     }
 }

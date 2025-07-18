@@ -825,6 +825,103 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         return hiddenStates
     }
 
+    /// Extract and mean-pool patch embeddings from a single image into a 1D vector
+    /// 
+    /// This function preprocesses the image, applies patch embedding, and then mean-pools
+    /// the resulting patch embeddings into a single 1D feature vector.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let image = CIImage(contentsOf: imageURL)!
+    /// let pooledEmbeddings = try model.extractAndPoolEmbeddings(from: image, processorConfig: processorConfig)
+    /// // pooledEmbeddings shape: [embedDimensions] (1D vector)
+    /// ```
+    /// 
+    /// - Parameter image: The input image as a CIImage
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: The mean-pooled embeddings as a 1D MLXArray
+    /// - Throws: VLMError if image processing fails
+    public func extractAndPoolEmbeddings(
+        from image: CIImage, 
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) throws -> MLXArray {
+        // Get the patch embeddings
+        let patchEmbeddings = try extractPatchEmbeddings(
+            from: image, 
+            processing: processing, 
+            processorConfig: processorConfig
+        )
+        
+        // Mean-pool across the patch dimension (first dimension)
+        let pooledEmbeddings = mean(patchEmbeddings, axis: 0)
+        
+        // Print information about the pooled embeddings
+        print("Pooled embeddings dimensions: \(pooledEmbeddings.shape)")
+        print("Pooled embeddings size: \(pooledEmbeddings.size)")
+        print("Pooled embeddings data type: \(pooledEmbeddings.dtype)")
+        
+        // Calculate size in bytes based on the actual data type
+        let bytesPerElement: Int
+        switch pooledEmbeddings.dtype {
+        case .float16:
+            bytesPerElement = 2
+        case .float32:
+            bytesPerElement = 4
+        case .float64:
+            bytesPerElement = 8
+        default:
+            bytesPerElement = 4 // fallback
+        }
+        print("Pooled embeddings size in bytes: \(pooledEmbeddings.size * bytesPerElement)")
+        
+        return pooledEmbeddings
+    }
+
+    /// Calculate cosine similarity between two mean-pooled embeddings
+    /// 
+    /// This function computes the cosine similarity between two 1D feature vectors
+    /// obtained from mean-pooled patch embeddings.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let image1 = CIImage(contentsOf: imageURL1)!
+    /// let image2 = CIImage(contentsOf: imageURL2)!
+    /// 
+    /// let embedding1 = try model.extractAndPoolEmbeddings(from: image1, processorConfig: processorConfig)
+    /// let embedding2 = try model.extractAndPoolEmbeddings(from: image2, processorConfig: processorConfig)
+    /// let similarity = model.cosineSimilarity(embedding1, embedding2)
+    /// // similarity is a value between -1 and 1, where 1 means identical
+    /// ```
+    /// 
+    /// - Parameter embedding1: First 1D embedding vector
+    /// - Parameter embedding2: Second 1D embedding vector
+    /// - Returns: Cosine similarity value between -1 and 1
+    public func cosineSimilarity(_ embedding1: MLXArray, _ embedding2: MLXArray) -> Float {
+        // Ensure both embeddings are 1D
+        let vec1 = embedding1.flattened()
+        let vec2 = embedding2.flattened()
+        
+        // Calculate dot product
+        let dotProduct = sum(vec1 * vec2)
+        
+        // Calculate magnitudes
+        let magnitude1 = sqrt(sum(vec1 * vec1))
+        let magnitude2 = sqrt(sum(vec2 * vec2))
+        
+        // Calculate cosine similarity
+        let similarity = dotProduct / (magnitude1 * magnitude2)
+        
+        // Convert to Float and handle potential NaN
+        let result = similarity.item() as Float
+        return result.isNaN ? 0.0 : result
+    }
+
 }
 
 // MARK: - Configuration
