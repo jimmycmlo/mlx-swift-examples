@@ -1102,12 +1102,26 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
     ) async throws -> [Int] {
         let startTime = Date()
         
-        // Extract mean-pooled embeddings from each frame
-        let frameEmbeddings = try await extractAndPoolVideoEmbeddings(
-            from: videoURL,
-            processing: processing,
-            processorConfig: processorConfig
+        // Extract CIImage frames from video at 2 FPS for scene detection
+        let ciImages = try await MediaProcessing.asCIImageSequence(
+            AVAsset(url: videoURL), 
+            samplesPerSecond: 2
         )
+        
+        var frameEmbeddings: [MLXArray] = []
+        
+        // Process each frame
+        for (index, frameImage) in ciImages.enumerated() {
+            print("Processing frame \(index + 1)/\(ciImages.count)")
+            
+            let frameEmbedding = try extractAndPoolEmbeddings(
+                from: frameImage,
+                processing: processing,
+                processorConfig: processorConfig
+            )
+            
+            frameEmbeddings.append(frameEmbedding)
+        }
         
         guard !frameEmbeddings.isEmpty else {
             throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
