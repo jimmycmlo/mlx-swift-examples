@@ -805,6 +805,22 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         
         // Print the dimensions of the hidden states
         print("Hidden states dimensions: \(hiddenStates.shape)")
+        print("Hidden states size: \(hiddenStates.size)")
+        print("Hidden states data type: \(hiddenStates.dtype)")
+        
+        // Calculate size in bytes based on the actual data type
+        let bytesPerElement: Int
+        switch hiddenStates.dtype {
+        case .float16:
+            bytesPerElement = 2
+        case .float32:
+            bytesPerElement = 4
+        case .float64:
+            bytesPerElement = 8
+        default:
+            bytesPerElement = 4 // fallback
+        }
+        print("Hidden states size in bytes: \(hiddenStates.size * bytesPerElement)")
         
         return hiddenStates
     }
