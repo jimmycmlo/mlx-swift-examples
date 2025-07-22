@@ -24,8 +24,16 @@ struct ContentView: View {
 
     @State var llm = VLMEvaluator()
     @Environment(DeviceStat.self) private var deviceStat
+    
+    enum FrameSpecificationType: String, CaseIterable {
+        case allFrames = "All Frames"
+        case frameNumbers = "Frame Numbers"
+        case timestamps = "Timestamps"
+    }
     @State private var sceneThreshold: Float = 0.05
     @State private var minSceneDuration: Float = 2.0
+    @State private var frameSpecification: String = ""
+    @State private var frameSpecificationType: FrameSpecificationType = .allFrames
 
     @State private var selectedImage: PlatformImage? = nil {
         didSet {
@@ -56,7 +64,8 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading) {
+        ScrollView {
+            VStack(alignment: .leading) {
             VStack {
                 HStack {
                     Text(llm.modelInfo)
@@ -328,6 +337,39 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        
+                        Divider()
+                            .padding(.vertical, 8)
+                        
+                        Text("Frame Selection")
+                            .font(.title2)
+                            .fontWeight(.medium)
+                        
+                        Picker("Frame Specification Type", selection: $frameSpecificationType) {
+                            ForEach(FrameSpecificationType.allCases, id: \.self) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+                        .disabled(llm.running)
+                        
+                        if frameSpecificationType != .allFrames {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Frame Specification:")
+                                    .font(.headline)
+                                
+                                TextField("Enter values (comma-separated)", text: $frameSpecification)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .disabled(llm.running)
+                                
+                                Text(frameSpecificationType == .frameNumbers ? 
+                                     "Example: 0, 10, 20, 30 (frame numbers)" : 
+                                     "Example: 0.0, 5.0, 10.0, 15.0 (timestamps in seconds)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.top, 8)
+                        }
                     }
                     .padding()
                     .background(Color.secondary.opacity(0.1))
@@ -379,6 +421,7 @@ struct ContentView: View {
         .task {
             _ = try? await llm.load()
         }
+        }
     }
 
     private func generate() {
@@ -406,7 +449,8 @@ struct ContentView: View {
                 }
             } else {
                 if let videoURL = selectedVideoURL {
-                    llm.generate(image: nil, videoURL: videoURL)
+                    let frameSpec = createFrameSpecification()
+                    llm.generate(image: nil, videoURL: videoURL, frameSpecification: frameSpec)
                 }
             }
         }
@@ -500,7 +544,8 @@ struct ContentView: View {
     private func extractVideoPatches() {
         Task {
             if let videoURL = selectedVideoURL {
-                llm.extractVideoPatches(videoURL: videoURL)
+                let frameSpec = createFrameSpecification()
+                llm.extractVideoPatches(videoURL: videoURL, frameSpecification: frameSpec)
             }
         }
     }
@@ -508,7 +553,8 @@ struct ContentView: View {
     private func videoMeanPool() {
         Task {
             if let videoURL = selectedVideoURL {
-                llm.videoMeanPool(videoURL: videoURL)
+                let frameSpec = createFrameSpecification()
+                llm.videoMeanPool(videoURL: videoURL, frameSpecification: frameSpec)
             }
         }
     }
@@ -516,7 +562,8 @@ struct ContentView: View {
     private func calculateVideoSimilarity() {
         Task {
             if let videoURL = selectedVideoURL {
-                llm.calculateVideoSimilarity(videoURL: videoURL)
+                let frameSpec = createFrameSpecification()
+                llm.calculateVideoSimilarity(videoURL: videoURL, frameSpecification: frameSpec)
             }
         }
     }
@@ -526,6 +573,23 @@ struct ContentView: View {
             if let videoURL = selectedVideoURL {
                 llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold, minSceneDuration: minSceneDuration)
             }
+        }
+    }
+    
+    private func createFrameSpecification() -> Qwen2VL.FrameSpecification {
+        switch frameSpecificationType {
+        case .allFrames:
+            return .allFrames
+        case .frameNumbers:
+            let numbers = frameSpecification
+                .split(separator: ",")
+                .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            return .frameNumbers(numbers)
+        case .timestamps:
+            let timestamps = frameSpecification
+                .split(separator: ",")
+                .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            return .timestamps(timestamps)
         }
     }
 
@@ -634,7 +698,7 @@ class VLMEvaluator {
         }
     }
 
-    private func generate(prompt: String, image: CIImage?, videoURL: URL?) async {
+    private func generate(prompt: String, image: CIImage?, videoURL: URL?, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) async {
 
         self.output = ""
 
@@ -646,8 +710,10 @@ class VLMEvaluator {
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
                     if videoURL != nil {
                         // For videos: lower pixel limits
-                        qwen2vlProcessor.config.maxPixels = 256 * 28 * 28  // 200,704
-                        qwen2vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
+//                        qwen2vlProcessor.config.maxPixels = 256 * 28 * 28  // 200,704
+//                        qwen2vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
+                        qwen2vlProcessor.config.maxPixels = 1024 * 28 * 28  // 401,408
+                        qwen2vlProcessor.config.minPixels = 256 * 28 * 28  // 200,704
                     } else if image != nil {
                         // For images: higher pixel limits
                         qwen2vlProcessor.config.maxPixels = 1024 * 28 * 28  // 401,408
@@ -658,6 +724,11 @@ class VLMEvaluator {
 
             // each time you generate you will get something new
             MLXRandom.seed(UInt64(Date.timeIntervalSinceReferenceDate * 1000))
+            
+            // Show frame specification if video is being processed
+            if videoURL != nil {
+                self.output = "Processing video with frame specification: \(frameSpecification)\n\n"
+            }
 
             try await modelContainer.perform { (context: ModelContext) -> Void in
                 let images: [UserInput.Image] = if let image { [.ciImage(image)] } else { [] }
@@ -678,7 +749,14 @@ class VLMEvaluator {
                 var userInput = UserInput(chat: chat)
 //                userInput.processing.resize = .init(width: 448, height: 448)
 
-                let lmInput = try await context.processor.prepare(input: userInput)
+                let lmInput: LMInput
+                if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor, videoURL != nil {
+                    // Use frame specification for video processing
+                    lmInput = try await qwen2vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: frameSpecification)
+                } else {
+                    // Use regular prepare for images or no media
+                    lmInput = try await context.processor.prepare(input: userInput)
+                }
 
                 let stream = try MLXLMCommon.generate(
                     input: lmInput, parameters: generateParameters, context: context)
@@ -706,13 +784,13 @@ class VLMEvaluator {
         }
     }
 
-    func generate(image: CIImage?, videoURL: URL?) {
+    func generate(image: CIImage?, videoURL: URL?, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
         guard !running else { return }
         let currentPrompt = prompt
         prompt = ""
         generationTask = Task {
             running = true
-            await generate(prompt: currentPrompt, image: image, videoURL: videoURL)
+            await generate(prompt: currentPrompt, image: image, videoURL: videoURL, frameSpecification: frameSpecification)
             running = false
         }
     }
@@ -833,16 +911,16 @@ class VLMEvaluator {
         }
     }
     
-    func extractVideoPatches(videoURL: URL) {
+    func extractVideoPatches(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
-            await extractVideoPatchesAsync(videoURL: videoURL)
+            await extractVideoPatchesAsync(videoURL: videoURL, frameSpecification: frameSpecification)
             running = false
         }
     }
     
-    private func extractVideoPatchesAsync(videoURL: URL) async {
+    private func extractVideoPatchesAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
         self.output = ""
         
         do {
@@ -859,7 +937,8 @@ class VLMEvaluator {
                 
                 let frameEmbeddings = try await qwen2VL.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
                 
-                var output = "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
+                var output = "Frame specification: \(frameSpecification)\n"
+                output += "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
                 for (index, embedding) in frameEmbeddings.enumerated() {
                     output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
                 }
@@ -873,16 +952,16 @@ class VLMEvaluator {
         }
     }
     
-    func videoMeanPool(videoURL: URL) {
+    func videoMeanPool(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
-            await videoMeanPoolAsync(videoURL: videoURL)
+            await videoMeanPoolAsync(videoURL: videoURL, frameSpecification: frameSpecification)
             running = false
         }
     }
     
-    private func videoMeanPoolAsync(videoURL: URL) async {
+    private func videoMeanPoolAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
         self.output = ""
         
         do {
@@ -897,9 +976,10 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
-                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, processorConfig: processorConfig)
+                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: frameSpecification, processorConfig: processorConfig)
                 
-                var output = "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
+                var output = "Frame specification: \(frameSpecification)\n"
+                output += "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
                 for (index, embedding) in frameEmbeddings.enumerated() {
                     output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
                 }
@@ -913,16 +993,16 @@ class VLMEvaluator {
         }
     }
     
-    func calculateVideoSimilarity(videoURL: URL) {
+    func calculateVideoSimilarity(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
-            await calculateVideoSimilarityAsync(videoURL: videoURL)
+            await calculateVideoSimilarityAsync(videoURL: videoURL, frameSpecification: frameSpecification)
             running = false
         }
     }
     
-    private func calculateVideoSimilarityAsync(videoURL: URL) async {
+    private func calculateVideoSimilarityAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
         self.output = ""
         
         do {
@@ -937,9 +1017,10 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
-                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, processorConfig: processorConfig)
+                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: frameSpecification, processorConfig: processorConfig)
                 
-                var output = "Cosine distances to reference frame (Frame 1):\n"
+                var output = "Frame specification: \(frameSpecification)\n"
+                output += "Cosine distances to reference frame (Frame 1):\n"
                 for (index, distance) in distances.enumerated() {
                     output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
                 }

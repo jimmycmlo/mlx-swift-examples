@@ -635,6 +635,178 @@ public class Qwen2VLProcessor: UserInputProcessor {
             image: processedImage,
             video: processedVideo)
     }
+
+    /// Prepare input with frame specification for selective video processing
+    /// 
+    /// This method allows you to control which frames from videos are processed
+    /// during the preprocessing stage, enabling more efficient video analysis.
+    /// 
+    /// - Parameter input: The user input containing text, images, and/or videos
+    /// - Parameter frameSpecification: Which frames to process from videos
+    /// - Returns: The prepared LMInput with selective frame processing
+    /// - Throws: VLMError if video processing fails
+    public func prepareWithFrameSpecification(input: UserInput, frameSpecification: Qwen2VL.FrameSpecification) async throws -> LMInput {
+        let messages = Qwen2VLMessageGenerator().generate(from: input)
+
+        var promptTokens = try tokenizer.applyChatTemplate(messages: messages)
+
+        // Text-only input
+        if input.images.isEmpty, input.videos.isEmpty {
+            return LMInput(tokens: MLXArray(promptTokens))
+        }
+
+        // Process images if any
+        var processedImage: LMInput.ProcessedImage?
+        if !input.images.isEmpty {
+            let imagePixelsAndFrames = try input.images.map {
+                try preprocess(images: [$0.asCIImage()], processing: input.processing)
+            }
+            let imagePixelsConcatenated = concatenated(imagePixelsAndFrames.map { $0.0 })
+            processedImage = LMInput.ProcessedImage(
+                pixels: imagePixelsConcatenated, frames: imagePixelsAndFrames.map { $0.1 })
+            if let imageFrames = processedImage?.frames {
+                promptTokens = try QwenVL.replacePaddingTokens(
+                    in: promptTokens, frames: imageFrames, paddingToken: "<|image_pad|>",
+                    mergeSize: config.mergeSize, tokenizer: tokenizer)
+            }
+        }
+
+        // Process videos with frame specification
+        var processedVideo: LMInput.ProcessedVideo?
+        if !input.videos.isEmpty {
+            var videosAsImageSequences = [[MLXArray]]()
+            var resizedSize: CGSize = .zero
+            
+            for video in input.videos {
+                let imageSequence: [MLXArray]
+                
+                switch frameSpecification {
+                case .allFrames:
+                    // Process all frames as before
+                    imageSequence = try await MediaProcessing.asProcessedSequence(
+                        video.asAVAsset(), maxFrames: config.maxFrames, targetFPS: { _ in config.fps }
+                    ) { frame in
+                        let resizedImage = MediaProcessing.apply(frame.frame, processing: input.processing)
+                        if resizedSize == .zero {
+                            let size = resizedImage.extent.size
+                            let (resizedHeight, resizedWidth) = try QwenVL.targetSize(
+                                height: Int(size.height), width: Int(size.width),
+                                factor: config.patchSize * config.mergeSize,
+                                minPixels: config.minPixels, maxPixels: config.maxPixels)
+                            resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
+                        }
+                        let processedImage = preprocess(image: resizedImage, resizedSize: resizedSize)
+                        return VideoFrame(frame: processedImage, timeStamp: frame.timeStamp)
+                    }.frames
+                    
+                case .frameNumbers(let frameNumbers):
+                    // Process only specified frame numbers
+                    let asset = video.asAVAsset()
+                    let duration = try await asset.load(.duration)
+                    let durationSeconds = CMTimeGetSeconds(duration)
+                    let maxFrame = Int(durationSeconds * config.fps) - 1
+                    
+                    let validFrameNumbers = frameNumbers.filter { $0 >= 0 && $0 <= maxFrame }
+                    if validFrameNumbers.isEmpty {
+                        throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid frame numbers provided"])
+                    }
+                    
+                    imageSequence = try await processSpecificFrames(
+                        asset: asset,
+                        frameNumbers: validFrameNumbers,
+                        processing: input.processing,
+                        resizedSize: &resizedSize
+                    )
+                    
+                case .timestamps(let timestamps):
+                    // Process frames at specific timestamps
+                    let asset = video.asAVAsset()
+                    let fps = config.fps
+                    let frameNumbers = timestamps.map { Int($0 * fps) }
+                    
+                    imageSequence = try await processSpecificFrames(
+                        asset: asset,
+                        frameNumbers: frameNumbers,
+                        processing: input.processing,
+                        resizedSize: &resizedSize
+                    )
+                }
+                
+                videosAsImageSequences.append(imageSequence)
+            }
+            
+            let videoPixelsAndFrames = try videosAsImageSequences.map {
+                try QwenVL.patchify(
+                    images: $0, mergeSize: config.mergeSize, patchSize: config.patchSize,
+                    temporalPatchSize: config.temporalPatchSize)
+            }
+            let videoPixelsConcatenated = concatenated(videoPixelsAndFrames.map { $0.0 })
+            processedVideo = LMInput.ProcessedVideo(
+                pixels: videoPixelsConcatenated, frames: videoPixelsAndFrames.map { $0.1 })
+            if let videoFrames = processedVideo?.frames {
+                promptTokens = try QwenVL.replacePaddingTokens(
+                    in: promptTokens, frames: videoFrames, paddingToken: "<|video_pad|>",
+                    mergeSize: config.mergeSize, tokenizer: tokenizer)
+            }
+        }
+
+        let promptArray = MLXArray(promptTokens).expandedDimensions(axis: 0)
+        let mask = ones(like: promptArray).asType(.int8)
+        return LMInput(
+            text: .init(tokens: promptArray, mask: mask),
+            image: processedImage,
+            video: processedVideo)
+    }
+
+    /// Helper method to process specific frames from a video asset
+    private func processSpecificFrames(
+        asset: AVAsset,
+        frameNumbers: [Int],
+        processing: UserInput.Processing,
+        resizedSize: inout CGSize
+    ) async throws -> [MLXArray] {
+        var imageSequence: [MLXArray] = []
+        
+        for frameNumber in frameNumbers {
+            let timestamp = TimeInterval(frameNumber) / config.fps
+            let frameImage = try await extractFrameFromAsset(asset, at: timestamp)
+            
+            let resizedImage = MediaProcessing.apply(frameImage, processing: processing)
+            if resizedSize == .zero {
+                let size = resizedImage.extent.size
+                let (resizedHeight, resizedWidth) = try QwenVL.targetSize(
+                    height: Int(size.height), width: Int(size.width),
+                    factor: config.patchSize * config.mergeSize,
+                    minPixels: config.minPixels, maxPixels: config.maxPixels)
+                resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
+            }
+            let processedImage = preprocess(image: resizedImage, resizedSize: resizedSize)
+            imageSequence.append(processedImage.asMLXArray())
+        }
+        
+        return imageSequence
+    }
+
+    /// Helper function to extract a single frame from an asset at a specific timestamp
+    private func extractFrameFromAsset(_ asset: AVAsset, at timestamp: TimeInterval) async throws -> CIImage {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        
+        let cmTime = CMTime(seconds: timestamp, preferredTimescale: 600)
+        
+        do {
+            let cgImage = try await generator.image(at: cmTime).image
+            return CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+        } catch {
+            throw NSError(
+                domain: "VideoProcessing", 
+                code: -1, 
+                userInfo: [NSLocalizedDescriptionKey: "Failed to extract frame at timestamp \(timestamp): \(error.localizedDescription)"]
+            )
+        }
+    }
 }
 
 // MARK: - Model
@@ -716,6 +888,118 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         let result = languageModel(nil, cache: cache, inputEmbedding: inputEmbeddings)
 
         return .logits(result)
+    }
+
+    /// Prepare the model with frame specification for selective video processing
+    /// 
+    /// This method allows you to control which frames from videos are processed
+    /// during model inference, enabling more efficient and targeted video analysis.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let input = LMInput(...) // with video content
+    /// 
+    /// // Process only specific frames
+    /// let result = try model.prepareWithFrameSpecification(
+    ///     input, 
+    ///     cache: cache, 
+    ///     windowSize: nil,
+    ///     frameSpecification: .frameNumbers([0, 10, 20, 30])
+    /// )
+    /// ```
+    /// 
+    /// - Parameter input: The input containing text, images, and/or videos
+    /// - Parameter cache: The KV cache for attention
+    /// - Parameter windowSize: Optional window size for sliding window attention
+    /// - Parameter frameSpecification: Which frames to process from videos
+    /// - Returns: The prepare result containing logits or tokens
+    /// - Throws: VLMError if video processing fails
+    public func prepareWithFrameSpecification(_ input: LMInput, cache: [any KVCache], windowSize: Int?, frameSpecification: FrameSpecification) throws -> PrepareResult {
+        let dtype = visionModel.patchEmbed.proj.weight.dtype
+
+        // Process both images and videos together
+        var allPixels: MLXArray?
+        var allFrames: [THW] = []
+
+        if let imagePixels = input.image?.pixels, let imageFrames = input.image?.frames {
+            allPixels = imagePixels.asType(dtype)
+            allFrames.append(contentsOf: imageFrames)
+        }
+
+        // Process videos with frame specification
+        if let videoPixels = input.video?.pixels, let videoFrames = input.video?.frames {
+            // Apply frame specification to video frames
+            let (filteredPixels, filteredFrames) = try applyFrameSpecificationToVideo(
+                pixels: videoPixels,
+                frames: videoFrames,
+                frameSpecification: frameSpecification
+            )
+            
+            if allPixels == nil {
+                allPixels = filteredPixels.asType(dtype)
+            } else {
+                allPixels = concatenated([allPixels!, filteredPixels.asType(dtype)])
+            }
+            allFrames.append(contentsOf: filteredFrames)
+        }
+
+        let inputEmbeddings = self.inputEmbeddings(
+            inputIds: input.text.tokens, pixelValues: allPixels,
+            frames: allFrames.isEmpty ? nil : allFrames)
+
+        let result = languageModel(nil, cache: cache, inputEmbedding: inputEmbeddings)
+
+        return .logits(result)
+    }
+
+    /// Apply frame specification to video pixels and frames
+    private func applyFrameSpecificationToVideo(
+        pixels: MLXArray,
+        frames: [THW],
+        frameSpecification: FrameSpecification
+    ) throws -> (MLXArray, [THW]) {
+        switch frameSpecification {
+        case .allFrames:
+            return (pixels, frames)
+            
+        case .frameNumbers(let frameNumbers):
+            // Validate frame numbers
+            let maxFrame = frames.count - 1
+            let validFrameNumbers = frameNumbers.filter { $0 >= 0 && $0 <= maxFrame }
+            
+            if validFrameNumbers.isEmpty {
+                throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid frame numbers provided"])
+            }
+            
+            // Extract specified frames
+            var selectedPixels: [MLXArray] = []
+            var selectedFrames: [THW] = []
+            
+            for frameNumber in validFrameNumbers {
+                // Calculate the start and end indices for this frame in the pixels array
+                let frameStartIndex = frames.prefix(frameNumber).reduce(0) { $0 + $1.t }
+                let frameEndIndex = frameStartIndex + frames[frameNumber].t
+                
+                let framePixels = pixels[frameStartIndex..<frameEndIndex]
+                selectedPixels.append(framePixels)
+                selectedFrames.append(frames[frameNumber])
+            }
+            
+            return (concatenated(selectedPixels), selectedFrames)
+            
+        case .timestamps(let timestamps):
+            // Convert timestamps to frame numbers based on frame duration
+            // This is a simplified approach - in practice, you'd need to know the video FPS
+            let fps = 2.0 // Default FPS for video processing
+            let frameNumbers = timestamps.map { Int($0 * fps) }
+            
+            return try applyFrameSpecificationToVideo(
+                pixels: pixels,
+                frames: frames,
+                frameSpecification: .frameNumbers(frameNumbers)
+            )
+        }
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [any KVCache]?) -> MLXArray {
@@ -1175,6 +1459,220 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         print("Average time per frame: \(String(format: "%.3f", duration / Double(frameEmbeddings.count))) seconds")
         
         return sceneChanges
+    }
+
+    /// Helper function to extract a single frame from an asset at a specific timestamp
+    private func extractFrameFromAsset(_ asset: AVAsset, at timestamp: TimeInterval) async throws -> CIImage {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        
+        let cmTime = CMTime(seconds: timestamp, preferredTimescale: 600)
+        
+        do {
+            let cgImage = try await generator.image(at: cmTime).image
+            return CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+        } catch {
+            throw NSError(
+                domain: "VideoProcessing", 
+                code: -1, 
+                userInfo: [NSLocalizedDescriptionKey: "Failed to extract frame at timestamp \(timestamp): \(error.localizedDescription)"]
+            )
+        }
+    }
+
+    /// Frame specification for selective video processing
+    public enum FrameSpecification {
+        /// Process specific frame numbers (0-based indexing)
+        case frameNumbers([Int])
+        /// Process frames at specific timestamps (in seconds)
+        case timestamps([TimeInterval])
+        /// Process all frames (default behavior)
+        case allFrames
+    }
+
+    /// Extract and mean-pool embeddings from specific frames of a video
+    /// 
+    /// This function processes only the specified frames of a video, extracts patch embeddings,
+    /// mean-pools them, and returns an array of 1D feature vectors for each specified frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// 
+    /// // Process specific frame numbers
+    /// let frameEmbeddings = try model.extractAndPoolVideoEmbeddings(
+    ///     from: videoURL, 
+    ///     frameSpecification: .frameNumbers([0, 10, 20, 30]),
+    ///     processorConfig: processorConfig
+    /// )
+    /// 
+    /// // Process frames at specific timestamps
+    /// let frameEmbeddings = try model.extractAndPoolVideoEmbeddings(
+    ///     from: videoURL, 
+    ///     frameSpecification: .timestamps([0.0, 5.0, 10.0, 15.0]),
+    ///     processorConfig: processorConfig
+    /// )
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter frameSpecification: Which frames to process (frame numbers, timestamps, or all frames)
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of mean-pooled embeddings for each specified frame
+    /// - Throws: VLMError if video processing fails
+    public func extractAndPoolVideoEmbeddings(
+        from videoURL: URL,
+        frameSpecification: FrameSpecification = .allFrames,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [MLXArray] {
+        // Get video asset and duration
+        let asset = AVAsset(url: videoURL)
+        let duration = try await asset.load(.duration)
+        let durationSeconds = CMTimeGetSeconds(duration)
+        
+        print("Video duration: \(String(format: "%.2f", durationSeconds)) seconds")
+        
+        // Determine which frames to process
+        let framesToProcess: [Int]
+        let frameTimestamps: [TimeInterval]
+        
+        switch frameSpecification {
+        case .frameNumbers(let frameNumbers):
+            framesToProcess = frameNumbers.sorted()
+            frameTimestamps = frameNumbers.map { TimeInterval($0) / processorConfig.fps }
+            print("Processing specific frame numbers: \(frameNumbers)")
+            
+        case .timestamps(let timestamps):
+            let sortedTimestamps = timestamps.sorted()
+            framesToProcess = sortedTimestamps.map { Int($0 * processorConfig.fps) }
+            frameTimestamps = sortedTimestamps
+            print("Processing frames at timestamps: \(timestamps.map { String(format: "%.2f", $0) })")
+            
+        case .allFrames:
+            // Extract all frames as before
+            let ciImages = try await MediaProcessing.asCIImageSequence(
+                AVAsset(url: videoURL), 
+                samplesPerSecond: Int(processorConfig.fps)
+            )
+            
+            var frameEmbeddings: [MLXArray] = []
+            
+            // Process each frame
+            for (index, frameImage) in ciImages.enumerated() {
+                print("Processing frame \(index + 1)/\(ciImages.count)")
+                
+                let frameEmbedding = try extractAndPoolEmbeddings(
+                    from: frameImage,
+                    processing: processing,
+                    processorConfig: processorConfig
+                )
+                
+                frameEmbeddings.append(frameEmbedding)
+            }
+            
+            print("Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames")
+            return frameEmbeddings
+        }
+        
+        // Validate frame numbers
+        let maxFrameNumber = Int(durationSeconds * processorConfig.fps)
+        let validFrames = framesToProcess.filter { $0 >= 0 && $0 < maxFrameNumber }
+        
+        if validFrames.count != framesToProcess.count {
+            let invalidFrames = framesToProcess.filter { $0 < 0 || $0 >= maxFrameNumber }
+            print("Warning: Invalid frame numbers ignored: \(invalidFrames)")
+        }
+        
+        guard !validFrames.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid frames to process"])
+        }
+        
+        print("Processing \(validFrames.count) valid frames out of \(framesToProcess.count) requested")
+        
+        // Extract specific frames using MediaProcessing
+        var frameEmbeddings: [MLXArray] = []
+        
+        for (index, frameNumber) in validFrames.enumerated() {
+            let timestamp = frameTimestamps[index]
+            print("Processing frame \(frameNumber) at timestamp \(String(format: "%.2f", timestamp))s (\(index + 1)/\(validFrames.count))")
+            
+            // Extract single frame at specific timestamp
+            let frameImage = try await extractFrameFromAsset(asset, at: timestamp)
+            
+            let frameEmbedding = try extractAndPoolEmbeddings(
+                from: frameImage,
+                processing: processing,
+                processorConfig: processorConfig
+            )
+            
+            frameEmbeddings.append(frameEmbedding)
+        }
+        
+        print("Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) specified frames")
+        return frameEmbeddings
+    }
+
+    /// Calculate cosine distance between specified frames and the first frame as reference
+    /// 
+    /// This function extracts mean-pooled embeddings from specified frames of a video
+    /// and calculates cosine distance between each frame and the first frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let model = Qwen2VL(config)
+    /// let processorConfig = Qwen2VLProcessorConfiguration(...)
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// 
+    /// // Calculate distances for specific frames
+    /// let distances = try model.calculateVideoFrameDistances(
+    ///     from: videoURL, 
+    ///     frameSpecification: .frameNumbers([0, 10, 20, 30]),
+    ///     processorConfig: processorConfig
+    /// )
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter frameSpecification: Which frames to process (frame numbers, timestamps, or all frames)
+    /// - Parameter processing: Optional processing parameters for resizing, etc.
+    /// - Parameter processorConfig: The processor configuration containing minPixels and maxPixels
+    /// - Returns: Array of cosine distance values for each frame (first frame will be 0.0)
+    /// - Throws: VLMError if video processing fails
+    public func calculateVideoFrameDistances(
+        from videoURL: URL,
+        frameSpecification: FrameSpecification = .allFrames,
+        processing: UserInput.Processing? = nil,
+        processorConfig: Qwen2VLProcessorConfiguration
+    ) async throws -> [Float] {
+        // Extract mean-pooled embeddings from specified frames
+        let frameEmbeddings = try await extractAndPoolVideoEmbeddings(
+            from: videoURL,
+            frameSpecification: frameSpecification,
+            processing: processing,
+            processorConfig: processorConfig
+        )
+        
+        guard !frameEmbeddings.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
+        }
+        
+        let referenceEmbedding = frameEmbeddings[0]
+        var similarities: [Float] = []
+        
+        // Calculate distance between each frame and the reference frame
+        for (index, frameEmbedding) in frameEmbeddings.enumerated() {
+            let distance = cosineDistance(referenceEmbedding, frameEmbedding)
+            similarities.append(distance)
+            
+            print("Frame \(index + 1) distance to reference: \(distance)")
+        }
+        
+        print("Successfully calculated similarities for \(similarities.count) frames")
+        return similarities
     }
 
 }
