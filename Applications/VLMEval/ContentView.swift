@@ -31,6 +31,7 @@ struct ContentView: View {
         case timestamps = "Timestamps"
     }
     @State private var sceneThreshold: Float = 0.05
+    @State private var visionThreshold: Float = 0.5
     @State private var minSceneDuration: Float = 2.0
     @State private var maxSceneDuration: Float = 15.0
     @State private var frameSpecification: String = ""
@@ -233,6 +234,12 @@ struct ContentView: View {
                     .disabled(llm.running || selectedVideoURL == nil)
                 Button("Scene Detection", action: detectSceneChanges)
                     .disabled(llm.running || selectedVideoURL == nil)
+                Button("Vision Feature Prints", action: extractVisionFeaturePrints)
+                    .disabled(llm.running || selectedVideoURL == nil)
+                Button("Vision Distances", action: calculateVisionDistances)
+                    .disabled(llm.running || selectedVideoURL == nil)
+                Button("Vision Scene Detection", action: detectVisionSceneChanges)
+                    .disabled(llm.running || selectedVideoURL == nil)
             }
             
             if selectedVideoURL != nil {
@@ -242,7 +249,7 @@ struct ContentView: View {
                         .padding(.top)
                     
                     VStack(alignment: .center, spacing: 12) {
-                        Text("Threshold: \(String(format: "%.2f", sceneThreshold))")
+                        Text("MLX Threshold: \(String(format: "%.2f", sceneThreshold))")
                             .font(.title2)
                             .fontWeight(.medium)
                         
@@ -282,6 +289,56 @@ struct ContentView: View {
                         
                         VStack(spacing: 4) {
                             Text("Range: 0.01 - 0.50")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Step: 0.01")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 8)
+                        
+                        Text("Vision Threshold: \(String(format: "%.2f", visionThreshold))")
+                            .font(.title2)
+                            .fontWeight(.medium)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                if visionThreshold > 0.01 {
+                                    visionThreshold = max(0.01, visionThreshold - 0.01)
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.orange)
+                            }
+                            .disabled(llm.running || visionThreshold <= 0.01)
+                            
+                            VStack(spacing: 4) {
+                                Text("Current Value")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.2f", visionThreshold))
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                            }
+                            
+                            Button(action: {
+                                if visionThreshold < 1.0 {
+                                    visionThreshold = min(1.0, visionThreshold + 0.01)
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.orange)
+                            }
+                            .disabled(llm.running || visionThreshold >= 1.0)
+                        }
+                        
+                        VStack(spacing: 4) {
+                            Text("Range: 0.01 - 1.00")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             Text("Step: 0.01")
@@ -623,6 +680,32 @@ struct ContentView: View {
         Task {
             if let videoURL = selectedVideoURL {
                 llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold, minSceneDuration: minSceneDuration, maxSceneDuration: maxSceneDuration)
+            }
+        }
+    }
+    
+    private func extractVisionFeaturePrints() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                let frameSpec = createFrameSpecification()
+                llm.extractVisionFeaturePrints(videoURL: videoURL, frameSpecification: frameSpec)
+            }
+        }
+    }
+    
+    private func calculateVisionDistances() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                let frameSpec = createFrameSpecification()
+                llm.calculateVisionDistances(videoURL: videoURL, frameSpecification: frameSpec)
+            }
+        }
+    }
+    
+    private func detectVisionSceneChanges() {
+        Task {
+            if let videoURL = selectedVideoURL {
+                llm.detectVisionSceneChanges(videoURL: videoURL, threshold: visionThreshold, minSceneDuration: minSceneDuration, maxSceneDuration: maxSceneDuration)
             }
         }
     }
@@ -1161,6 +1244,172 @@ class VLMEvaluator {
             self.output = result
         } catch {
             self.output = "Failed to detect scene changes: \(error)"
+        }
+    }
+    
+    // MARK: - Vision Framework Methods
+    
+    func extractVisionFeaturePrints(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await extractVisionFeaturePrintsAsync(videoURL: videoURL, frameSpecification: frameSpecification)
+            running = false
+        }
+    }
+    
+    private func extractVisionFeaturePrintsAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                let startTime = Date()
+                let featurePrints = try await qwen2VL.extractVideoVisionFeaturePrints(from: videoURL, frameSpecification: frameSpecification)
+                let endTime = Date()
+                let duration = endTime.timeIntervalSince(startTime)
+                
+                var output = "Vision Feature Print Extraction Results:\n"
+                output += "Frame specification: \(frameSpecification)\n"
+                output += "Total feature prints extracted: \(featurePrints.count)\n"
+                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+                
+                output += "Feature print details:\n"
+                for (index, featurePrint) in featurePrints.enumerated() {
+                    output += "Frame \(index + 1): data length \(featurePrint.data.count) bytes\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to extract Vision feature prints: \(error)"
+        }
+    }
+    
+    func calculateVisionDistances(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await calculateVisionDistancesAsync(videoURL: videoURL, frameSpecification: frameSpecification)
+            running = false
+        }
+    }
+    
+    private func calculateVisionDistancesAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                let startTime = Date()
+                let distances = try await qwen2VL.calculateVideoVisionFeaturePrintDistances(from: videoURL, frameSpecification: frameSpecification)
+                let endTime = Date()
+                let duration = endTime.timeIntervalSince(startTime)
+                
+                var output = "Vision Feature Print Distance Results:\n"
+                output += "Frame specification: \(frameSpecification)\n"
+                output += "Total distances calculated: \(distances.count)\n"
+                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+                
+                output += "Distance values (using first frame as reference):\n"
+                for (index, distance) in distances.enumerated() {
+                    output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
+                }
+                
+                // Calculate statistics
+                if distances.count > 1 {
+                    let minDistance = distances.min() ?? 0.0
+                    let maxDistance = distances.max() ?? 0.0
+                    let avgDistance = distances.reduce(0, +) / Float(distances.count)
+                    
+                    output += "\nDistance statistics:\n"
+                    output += "Minimum distance: \(String(format: "%.4f", minDistance))\n"
+                    output += "Maximum distance: \(String(format: "%.4f", maxDistance))\n"
+                    output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to calculate Vision distances: \(error)"
+        }
+    }
+    
+    func detectVisionSceneChanges(videoURL: URL, threshold: Float, minSceneDuration: Float, maxSceneDuration: Float) {
+        guard !running else { return }
+        generationTask = Task {
+            running = true
+            await detectVisionSceneChangesAsync(videoURL: videoURL, threshold: threshold, minSceneDuration: minSceneDuration, maxSceneDuration: maxSceneDuration)
+            running = false
+        }
+    }
+    
+    private func detectVisionSceneChangesAsync(videoURL: URL, threshold: Float, minSceneDuration: Float, maxSceneDuration: Float) async {
+        self.output = ""
+        
+        do {
+            let modelContainer = try await load()
+            
+            let result = try await modelContainer.perform { (context: ModelContext) -> String in
+                guard let qwen2VL = context.model as? Qwen2VL else {
+                    return "Error: Model is not Qwen2VL"
+                }
+                
+                let startTime = Date()
+                let sceneChanges = try await qwen2VL.detectSceneChangesWithVision(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration))
+                let endTime = Date()
+                let duration = endTime.timeIntervalSince(startTime)
+                
+                var output = "Vision-Based Scene Change Detection Results:\n"
+                output += "Threshold: \(String(format: "%.2f", threshold))\n"
+                output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
+                output += "Max scene duration: \(String(format: "%.1f", maxSceneDuration))s\n"
+                output += "Total scenes detected: \(sceneChanges.count)\n"
+                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+                
+                output += "Scene boundaries:\n"
+                for (sceneIndex, (frameIndex, timestamp)) in sceneChanges.enumerated() {
+                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex) (\(String(format: "%.1f", timestamp))s)\n"
+                }
+                
+                // Calculate scene durations if we have multiple scenes
+                if sceneChanges.count > 1 {
+                    output += "\nScene durations:\n"
+                    for i in 0..<(sceneChanges.count - 1) {
+                        let startFrame = sceneChanges[i].frameIndex
+                        let startTime = sceneChanges[i].timestamp
+                        let endFrame = sceneChanges[i + 1].frameIndex - 1
+                        let endTime = sceneChanges[i + 1].timestamp - 0.5 // Subtract 0.5s since we're at 2 FPS
+                        let frameDuration = endFrame - startFrame + 1
+                        let timeDuration = endTime - startTime
+                        output += "Scene \(i + 1): \(frameDuration) frames (\(String(format: "%.1f", timeDuration))s) - frames \(startFrame)-\(endFrame) (\(String(format: "%.1f", startTime))s-\(String(format: "%.1f", endTime))s)\n"
+                    }
+                    
+                    // Last scene duration
+                    let lastSceneStart = sceneChanges.last!
+                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart.frameIndex) (\(String(format: "%.1f", lastSceneStart.timestamp))s) to end\n"
+                }
+                
+                return output
+            }
+            
+            self.output = result
+        } catch {
+            self.output = "Failed to detect Vision-based scene changes: \(error)"
         }
     }
 }
