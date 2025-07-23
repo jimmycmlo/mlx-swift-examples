@@ -32,6 +32,7 @@ struct ContentView: View {
     }
     @State private var sceneThreshold: Float = 0.05
     @State private var minSceneDuration: Float = 2.0
+    @State private var maxSceneDuration: Float = 15.0
     @State private var frameSpecification: String = ""
     @State private var frameSpecificationType: FrameSpecificationType = .allFrames
 
@@ -341,6 +342,56 @@ struct ContentView: View {
                         Divider()
                             .padding(.vertical, 8)
                         
+                        Text("Max Scene Duration: \(String(format: "%.1f", maxSceneDuration))s")
+                            .font(.title2)
+                            .fontWeight(.medium)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                if maxSceneDuration > 5.0 {
+                                    maxSceneDuration = max(5.0, maxSceneDuration - 1.0)
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || maxSceneDuration <= 5.0)
+                            
+                            VStack(spacing: 4) {
+                                Text("Current Value")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(String(format: "%.1f", maxSceneDuration))
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                            }
+                            
+                            Button(action: {
+                                if maxSceneDuration < 60.0 {
+                                    maxSceneDuration = min(60.0, maxSceneDuration + 1.0)
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(llm.running || maxSceneDuration >= 60.0)
+                        }
+                        
+                        VStack(spacing: 4) {
+                            Text("Range: 5.0s - 60.0s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Step: 1.0s")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 8)
+                        
                         Text("Frame Selection")
                             .font(.title2)
                             .fontWeight(.medium)
@@ -571,7 +622,7 @@ struct ContentView: View {
     private func detectSceneChanges() {
         Task {
             if let videoURL = selectedVideoURL {
-                llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold, minSceneDuration: minSceneDuration)
+                llm.detectSceneChanges(videoURL: videoURL, threshold: sceneThreshold, minSceneDuration: minSceneDuration, maxSceneDuration: maxSceneDuration)
             }
         }
     }
@@ -1045,16 +1096,16 @@ class VLMEvaluator {
         }
     }
     
-    func detectSceneChanges(videoURL: URL, threshold: Float, minSceneDuration: Float) {
+    func detectSceneChanges(videoURL: URL, threshold: Float, minSceneDuration: Float, maxSceneDuration: Float) {
         guard !running else { return }
         generationTask = Task {
             running = true
-            await detectSceneChangesAsync(videoURL: videoURL, threshold: threshold, minSceneDuration: minSceneDuration)
+            await detectSceneChangesAsync(videoURL: videoURL, threshold: threshold, minSceneDuration: minSceneDuration, maxSceneDuration: maxSceneDuration)
             running = false
         }
     }
     
-    private func detectSceneChangesAsync(videoURL: URL, threshold: Float, minSceneDuration: Float) async {
+    private func detectSceneChangesAsync(videoURL: URL, threshold: Float, minSceneDuration: Float, maxSceneDuration: Float) async {
         self.output = ""
         
         do {
@@ -1070,13 +1121,14 @@ class VLMEvaluator {
                 }
                 
                 let startTime = Date()
-                let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), processorConfig: processorConfig)
+                let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration), processorConfig: processorConfig)
                 let endTime = Date()
                 let duration = endTime.timeIntervalSince(startTime)
                 
                 var output = "Scene Change Detection Results:\n"
                 output += "Threshold: \(String(format: "%.2f", threshold))\n"
                 output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
+                output += "Max scene duration: \(String(format: "%.1f", maxSceneDuration))s\n"
                 output += "Total scenes detected: \(sceneChanges.count)\n"
                 output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
                 

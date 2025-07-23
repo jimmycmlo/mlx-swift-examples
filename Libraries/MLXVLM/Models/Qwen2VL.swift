@@ -1382,6 +1382,7 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         from videoURL: URL,
         threshold: Float = 0.1,
         minSceneDuration: TimeInterval = 2.0, // Minimum scene duration in seconds
+        maxSceneDuration: TimeInterval = 15.0, // Maximum scene duration in seconds
         processing: UserInput.Processing? = nil,
         processorConfig: Qwen2VLProcessorConfiguration
     ) async throws -> [(frameIndex: Int, timestamp: TimeInterval)] {
@@ -1420,7 +1421,7 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
         var sceneChanges: [(frameIndex: Int, timestamp: TimeInterval)] = [(0, 0.0)] // Always include frame 0 as first scene
         var currentReferenceEmbedding = frameEmbeddings[0]
         
-        print("Scene change detection with threshold: \(threshold), min scene duration: \(minSceneDuration)s")
+        print("Scene change detection with threshold: \(threshold), min scene duration: \(minSceneDuration)s, max scene duration: \(maxSceneDuration)s")
         print("Frame 0 (0.0s): Starting new scene (reference frame)")
         
         // Analyze each frame starting from frame 1
@@ -1428,21 +1429,34 @@ public class Qwen2VL: Module, VLMModel, KVCacheDimensionProvider {
             let currentEmbedding = frameEmbeddings[frameIndex]
             let distance = cosineDistance(currentReferenceEmbedding, currentEmbedding)
             let timestamp = frameTimestamps[frameIndex]
+            let timeSinceLastScene = timestamp - sceneChanges.last!.timestamp
             
-            print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): distance to reference = \(String(format: "%.4f", distance))")
+            print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): distance to reference = \(String(format: "%.4f", distance)), time since last scene: \(String(format: "%.1f", timeSinceLastScene))s")
             
-            if distance > threshold {
-                // Check if enough time has passed since the last scene change
-                let timeSinceLastScene = timestamp - sceneChanges.last!.timestamp
-                
-                if timeSinceLastScene >= minSceneDuration {
-                    // Scene change detected (distance exceeds threshold and minimum duration met)
-                    sceneChanges.append((frameIndex: frameIndex, timestamp: timestamp))
-                    currentReferenceEmbedding = currentEmbedding
-                    print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE DETECTED - Starting new scene (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
-                } else {
-                    print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): Scene change ignored - too short (duration: \(String(format: "%.1f", timeSinceLastScene))s < \(minSceneDuration)s)")
-                }
+            var sceneChangeDetected = false
+            var sceneChangeReason = ""
+            
+            // Check if maximum scene duration has been exceeded
+            if timeSinceLastScene >= maxSceneDuration {
+                sceneChangeDetected = true
+                sceneChangeReason = "max duration exceeded"
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): FORCED SCENE CHANGE - Max duration exceeded (\(String(format: "%.1f", timeSinceLastScene))s >= \(maxSceneDuration)s)")
+            }
+            // Check if distance threshold is exceeded and minimum duration is met
+            else if distance > threshold && timeSinceLastScene >= minSceneDuration {
+                sceneChangeDetected = true
+                sceneChangeReason = "distance threshold"
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE DETECTED - Distance threshold exceeded (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
+            }
+            // Check if distance threshold is exceeded but minimum duration is not met
+            else if distance > threshold && timeSinceLastScene < minSceneDuration {
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): Scene change ignored - too short (duration: \(String(format: "%.1f", timeSinceLastScene))s < \(minSceneDuration)s)")
+            }
+            
+            if sceneChangeDetected {
+                sceneChanges.append((frameIndex: frameIndex, timestamp: timestamp))
+                currentReferenceEmbedding = currentEmbedding
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE APPLIED - \(sceneChangeReason) (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
             }
         }
         
