@@ -8,6 +8,7 @@ import MLXLMCommon
 import MLXVLM
 import PhotosUI
 import SwiftUI
+import Vision
 
 #if os(iOS) || os(visionOS)
     typealias PlatformImage = UIImage
@@ -23,6 +24,7 @@ let imageSystemPrompt =
 struct ContentView: View {
 
     @State var llm = VLMEvaluator()
+
     @Environment(DeviceStat.self) private var deviceStat
     
     enum FrameSpecificationType: String, CaseIterable {
@@ -710,7 +712,7 @@ struct ContentView: View {
         }
     }
     
-    private func createFrameSpecification() -> Qwen2VL.FrameSpecification {
+    private func createFrameSpecification() -> FrameSpecification {
         switch frameSpecificationType {
         case .allFrames:
             return .allFrames
@@ -726,6 +728,8 @@ struct ContentView: View {
             return .timestamps(timestamps)
         }
     }
+    
+
 
     #if os(macOS)
         private func loadData(from url: URL) throws -> Data {
@@ -770,6 +774,19 @@ class VLMEvaluator {
     var output = ""
     var modelInfo = ""
     var stat = ""
+    
+    let visionProcessor = VisionProcessor()
+    
+    private func convertToQwen2VLFrameSpecification(_ frameSpec: FrameSpecification) -> Qwen2VL.FrameSpecification {
+        switch frameSpec {
+        case .allFrames:
+            return .allFrames
+        case .frameNumbers(let numbers):
+            return .frameNumbers(numbers)
+        case .timestamps(let times):
+            return .timestamps(times)
+        }
+    }
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
@@ -832,7 +849,7 @@ class VLMEvaluator {
         }
     }
 
-    private func generate(prompt: String, image: CIImage?, videoURL: URL?, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) async {
+    private func generate(prompt: String, image: CIImage?, videoURL: URL?, frameSpecification: FrameSpecification = .allFrames) async {
 
         self.output = ""
 
@@ -886,7 +903,7 @@ class VLMEvaluator {
                 let lmInput: LMInput
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor, videoURL != nil {
                     // Use frame specification for video processing
-                    lmInput = try await qwen2vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: frameSpecification)
+                    lmInput = try await qwen2vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification))
                 } else {
                     // Use regular prepare for images or no media
                     lmInput = try await context.processor.prepare(input: userInput)
@@ -918,7 +935,7 @@ class VLMEvaluator {
         }
     }
 
-    func generate(image: CIImage?, videoURL: URL?, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
+    func generate(image: CIImage?, videoURL: URL?, frameSpecification: FrameSpecification = .allFrames) {
         guard !running else { return }
         let currentPrompt = prompt
         prompt = ""
@@ -1045,7 +1062,7 @@ class VLMEvaluator {
         }
     }
     
-    func extractVideoPatches(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
+    func extractVideoPatches(videoURL: URL, frameSpecification: FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
@@ -1054,7 +1071,7 @@ class VLMEvaluator {
         }
     }
     
-    private func extractVideoPatchesAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+    private func extractVideoPatchesAsync(videoURL: URL, frameSpecification: FrameSpecification) async {
         self.output = ""
         
         do {
@@ -1086,7 +1103,7 @@ class VLMEvaluator {
         }
     }
     
-    func videoMeanPool(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
+    func videoMeanPool(videoURL: URL, frameSpecification: FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
@@ -1095,7 +1112,7 @@ class VLMEvaluator {
         }
     }
     
-    private func videoMeanPoolAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+    private func videoMeanPoolAsync(videoURL: URL, frameSpecification: FrameSpecification) async {
         self.output = ""
         
         do {
@@ -1110,7 +1127,7 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
-                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: frameSpecification, processorConfig: processorConfig)
+                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
                 
                 var output = "Frame specification: \(frameSpecification)\n"
                 output += "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
@@ -1127,7 +1144,7 @@ class VLMEvaluator {
         }
     }
     
-    func calculateVideoSimilarity(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification = .allFrames) {
+    func calculateVideoSimilarity(videoURL: URL, frameSpecification: FrameSpecification = .allFrames) {
         guard !running else { return }
         generationTask = Task {
             running = true
@@ -1136,7 +1153,7 @@ class VLMEvaluator {
         }
     }
     
-    private func calculateVideoSimilarityAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+    private func calculateVideoSimilarityAsync(videoURL: URL, frameSpecification: FrameSpecification) async {
         self.output = ""
         
         do {
@@ -1151,7 +1168,7 @@ class VLMEvaluator {
                     return "Error: Processor is not Qwen2VLProcessor"
                 }
                 
-                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: frameSpecification, processorConfig: processorConfig)
+                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
                 
                 var output = "Frame specification: \(frameSpecification)\n"
                 output += "Cosine distances to reference frame (Frame 1):\n"
@@ -1249,7 +1266,7 @@ class VLMEvaluator {
     
     // MARK: - Vision Framework Methods
     
-    func extractVisionFeaturePrints(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) {
+    func extractVisionFeaturePrints(videoURL: URL, frameSpecification: FrameSpecification) {
         guard !running else { return }
         generationTask = Task {
             running = true
@@ -1258,42 +1275,32 @@ class VLMEvaluator {
         }
     }
     
-    private func extractVisionFeaturePrintsAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+    private func extractVisionFeaturePrintsAsync(videoURL: URL, frameSpecification: FrameSpecification) async {
         self.output = ""
         
         do {
-            let modelContainer = try await load()
+            let startTime = Date()
+            let featurePrints = try await visionProcessor.extractVideoFeaturePrints(from: videoURL, frameSpecification: frameSpecification)
+            let endTime = Date()
+            let duration = endTime.timeIntervalSince(startTime)
             
-            let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
-                }
-                
-                let startTime = Date()
-                let featurePrints = try await qwen2VL.extractVideoVisionFeaturePrints(from: videoURL, frameSpecification: frameSpecification)
-                let endTime = Date()
-                let duration = endTime.timeIntervalSince(startTime)
-                
-                var output = "Vision Feature Print Extraction Results:\n"
-                output += "Frame specification: \(frameSpecification)\n"
-                output += "Total feature prints extracted: \(featurePrints.count)\n"
-                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
-                
-                output += "Feature print details:\n"
-                for (index, featurePrint) in featurePrints.enumerated() {
-                    output += "Frame \(index + 1): data length \(featurePrint.data.count) bytes\n"
-                }
-                
-                return output
+            var output = "Vision Feature Print Extraction Results:\n"
+            output += "Frame specification: \(frameSpecification)\n"
+            output += "Total feature prints extracted: \(featurePrints.count)\n"
+            output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+            
+            output += "Feature print details:\n"
+            for (index, featurePrint) in featurePrints.enumerated() {
+                output += "Frame \(index + 1): data length \(featurePrint.data.count) bytes\n"
             }
             
-            self.output = result
+            self.output = output
         } catch {
             self.output = "Failed to extract Vision feature prints: \(error)"
         }
     }
     
-    func calculateVisionDistances(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) {
+    func calculateVisionDistances(videoURL: URL, frameSpecification: FrameSpecification) {
         guard !running else { return }
         generationTask = Task {
             running = true
@@ -1302,48 +1309,38 @@ class VLMEvaluator {
         }
     }
     
-    private func calculateVisionDistancesAsync(videoURL: URL, frameSpecification: Qwen2VL.FrameSpecification) async {
+    private func calculateVisionDistancesAsync(videoURL: URL, frameSpecification: FrameSpecification) async {
         self.output = ""
         
         do {
-            let modelContainer = try await load()
+            let startTime = Date()
+            let distances = try await visionProcessor.calculateVideoFeaturePrintDistances(from: videoURL, frameSpecification: frameSpecification)
+            let endTime = Date()
+            let duration = endTime.timeIntervalSince(startTime)
             
-            let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
-                }
-                
-                let startTime = Date()
-                let distances = try await qwen2VL.calculateVideoVisionFeaturePrintDistances(from: videoURL, frameSpecification: frameSpecification)
-                let endTime = Date()
-                let duration = endTime.timeIntervalSince(startTime)
-                
-                var output = "Vision Feature Print Distance Results:\n"
-                output += "Frame specification: \(frameSpecification)\n"
-                output += "Total distances calculated: \(distances.count)\n"
-                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
-                
-                output += "Distance values (using first frame as reference):\n"
-                for (index, distance) in distances.enumerated() {
-                    output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
-                }
-                
-                // Calculate statistics
-                if distances.count > 1 {
-                    let minDistance = distances.min() ?? 0.0
-                    let maxDistance = distances.max() ?? 0.0
-                    let avgDistance = distances.reduce(0, +) / Float(distances.count)
-                    
-                    output += "\nDistance statistics:\n"
-                    output += "Minimum distance: \(String(format: "%.4f", minDistance))\n"
-                    output += "Maximum distance: \(String(format: "%.4f", maxDistance))\n"
-                    output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
-                }
-                
-                return output
+            var output = "Vision Feature Print Distance Results:\n"
+            output += "Frame specification: \(frameSpecification)\n"
+            output += "Total distances calculated: \(distances.count)\n"
+            output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+            
+            output += "Distance values (using first frame as reference):\n"
+            for (index, distance) in distances.enumerated() {
+                output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
             }
             
-            self.output = result
+            // Calculate statistics
+            if distances.count > 1 {
+                let minDistance = distances.min() ?? 0.0
+                let maxDistance = distances.max() ?? 0.0
+                let avgDistance = distances.reduce(0, +) / Float(distances.count)
+                
+                output += "\nDistance statistics:\n"
+                output += "Minimum distance: \(String(format: "%.4f", minDistance))\n"
+                output += "Maximum distance: \(String(format: "%.4f", maxDistance))\n"
+                output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
+            }
+            
+            self.output = output
         } catch {
             self.output = "Failed to calculate Vision distances: \(error)"
         }
@@ -1362,52 +1359,42 @@ class VLMEvaluator {
         self.output = ""
         
         do {
-            let modelContainer = try await load()
+            let startTime = Date()
+            let sceneChanges = try await visionProcessor.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration))
+            let endTime = Date()
+            let duration = endTime.timeIntervalSince(startTime)
             
-            let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
-                }
-                
-                let startTime = Date()
-                let sceneChanges = try await qwen2VL.detectSceneChangesWithVision(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration))
-                let endTime = Date()
-                let duration = endTime.timeIntervalSince(startTime)
-                
-                var output = "Vision-Based Scene Change Detection Results:\n"
-                output += "Threshold: \(String(format: "%.2f", threshold))\n"
-                output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
-                output += "Max scene duration: \(String(format: "%.1f", maxSceneDuration))s\n"
-                output += "Total scenes detected: \(sceneChanges.count)\n"
-                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
-                
-                output += "Scene boundaries:\n"
-                for (sceneIndex, (frameIndex, timestamp)) in sceneChanges.enumerated() {
-                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex) (\(String(format: "%.1f", timestamp))s)\n"
-                }
-                
-                // Calculate scene durations if we have multiple scenes
-                if sceneChanges.count > 1 {
-                    output += "\nScene durations:\n"
-                    for i in 0..<(sceneChanges.count - 1) {
-                        let startFrame = sceneChanges[i].frameIndex
-                        let startTime = sceneChanges[i].timestamp
-                        let endFrame = sceneChanges[i + 1].frameIndex - 1
-                        let endTime = sceneChanges[i + 1].timestamp - 0.5 // Subtract 0.5s since we're at 2 FPS
-                        let frameDuration = endFrame - startFrame + 1
-                        let timeDuration = endTime - startTime
-                        output += "Scene \(i + 1): \(frameDuration) frames (\(String(format: "%.1f", timeDuration))s) - frames \(startFrame)-\(endFrame) (\(String(format: "%.1f", startTime))s-\(String(format: "%.1f", endTime))s)\n"
-                    }
-                    
-                    // Last scene duration
-                    let lastSceneStart = sceneChanges.last!
-                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart.frameIndex) (\(String(format: "%.1f", lastSceneStart.timestamp))s) to end\n"
-                }
-                
-                return output
+            var output = "Vision-Based Scene Change Detection Results:\n"
+            output += "Threshold: \(String(format: "%.2f", threshold))\n"
+            output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
+            output += "Max scene duration: \(String(format: "%.1f", maxSceneDuration))s\n"
+            output += "Total scenes detected: \(sceneChanges.count)\n"
+            output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+            
+            output += "Scene boundaries:\n"
+            for (sceneIndex, (frameIndex, timestamp)) in sceneChanges.enumerated() {
+                output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex) (\(String(format: "%.1f", timestamp))s)\n"
             }
             
-            self.output = result
+            // Calculate scene durations if we have multiple scenes
+            if sceneChanges.count > 1 {
+                output += "\nScene durations:\n"
+                for i in 0..<(sceneChanges.count - 1) {
+                    let startFrame = sceneChanges[i].frameIndex
+                    let startTime = sceneChanges[i].timestamp
+                    let endFrame = sceneChanges[i + 1].frameIndex - 1
+                    let endTime = sceneChanges[i + 1].timestamp - 0.5 // Subtract 0.5s since we're at 2 FPS
+                    let frameDuration = (endFrame - startFrame) + 1
+                    let timeDuration = endTime - startTime
+                    output += "Scene \(i + 1): \(frameDuration) frames (\(String(format: "%.1f", timeDuration))s) - frames \(startFrame)-\(endFrame) (\(String(format: "%.1f", startTime))s-\(String(format: "%.1f", endTime))s)\n"
+                }
+                
+                // Last scene duration
+                let lastSceneStart = sceneChanges.last!
+                output += "Scene \(sceneChanges.count): from frame \(lastSceneStart.frameIndex) (\(String(format: "%.1f", lastSceneStart.timestamp))s) to end\n"
+            }
+            
+            self.output = output
         } catch {
             self.output = "Failed to detect Vision-based scene changes: \(error)"
         }
@@ -1442,3 +1429,392 @@ struct SandboxFileTransfer {
         return sandboxURL
     }
 }
+
+// MARK: - Vision Processor
+
+/// A utility class for processing images and videos using Apple's Vision framework
+/// 
+/// This class provides functions for extracting feature prints from images and videos,
+/// calculating distances between feature prints, and detecting scene changes in videos.
+/// 
+/// Example usage:
+/// ```swift
+/// let processor = VisionProcessor()
+/// 
+/// // Extract feature print from image
+/// let image = CIImage(contentsOf: imageURL)!
+/// let featurePrint = try processor.extractFeaturePrint(from: image)
+/// 
+/// // Calculate distance between two feature prints
+/// let distance = try processor.featurePrintDistance(featurePrint1, featurePrint2)
+/// 
+/// // Detect scene changes in video
+/// let sceneChanges = try await processor.detectSceneChanges(
+///     from: videoURL, 
+///     threshold: 0.5,
+///     minSceneDuration: 2.0,
+///     maxSceneDuration: 15.0
+/// )
+/// ```
+public class VisionProcessor {
+    
+    public init() {}
+    
+    /// Extract Vision framework feature prints from a single image
+    /// 
+    /// This function uses Apple's Vision framework to generate feature prints
+    /// which are high-dimensional vectors representing image content.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let processor = VisionProcessor()
+    /// let image = CIImage(contentsOf: imageURL)!
+    /// let featurePrint = try processor.extractFeaturePrint(from: image)
+    /// // featurePrint is a VNFeaturePrintObservation
+    /// ```
+    /// 
+    /// - Parameter image: The input image as a CIImage
+    /// - Returns: The feature print observation
+    /// - Throws: Error if feature print generation fails
+    public func extractFeaturePrint(from image: CIImage) throws -> VNFeaturePrintObservation {
+        let request = VNGenerateImageFeaturePrintRequest()
+        
+        // Convert CIImage to CGImage for Vision framework
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(image, from: image.extent) else {
+            throw NSError(domain: "VisionProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert CIImage to CGImage"])
+        }
+        
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        
+        do {
+            try handler.perform([request])
+            
+            guard let result = request.results?.first as? VNFeaturePrintObservation else {
+                throw NSError(domain: "VisionProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to generate feature print"])
+            }
+            
+            print("Vision feature print generated successfully")
+            print("Feature print data length: \(result.data.count) bytes")
+            
+            return result
+        } catch {
+            throw NSError(domain: "VisionProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Vision framework error: \(error.localizedDescription)"])
+        }
+    }
+
+    /// Calculate distance between two Vision feature prints
+    /// 
+    /// This function computes the distance between two feature prints
+    /// using Apple's Vision framework computeDistance method.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let processor = VisionProcessor()
+    /// let image1 = CIImage(contentsOf: imageURL1)!
+    /// let image2 = CIImage(contentsOf: imageURL2)!
+    /// 
+    /// let featurePrint1 = try processor.extractFeaturePrint(from: image1)
+    /// let featurePrint2 = try processor.extractFeaturePrint(from: image2)
+    /// let distance = try processor.featurePrintDistance(featurePrint1, featurePrint2)
+    /// // distance is a value where 0 means identical, higher values mean more different
+    /// ```
+    /// 
+    /// - Parameter featurePrint1: First feature print observation
+    /// - Parameter featurePrint2: Second feature print observation
+    /// - Returns: Distance value (0 = identical, higher = more different)
+    /// - Throws: Error if distance computation fails
+    public func featurePrintDistance(_ featurePrint1: VNFeaturePrintObservation, _ featurePrint2: VNFeaturePrintObservation) throws -> Float {
+        var distance: Float = 0.0
+        
+        do {
+            try featurePrint1.computeDistance(&distance, to: featurePrint2)
+            return distance
+        } catch {
+            throw NSError(domain: "VisionProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to compute feature print distance: \(error.localizedDescription)"])
+        }
+    }
+
+    /// Extract Vision feature prints from a video by processing each frame
+    /// 
+    /// This function processes each frame of a video and extracts Vision framework
+    /// feature prints for each frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let processor = VisionProcessor()
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let frameFeaturePrints = try await processor.extractVideoFeaturePrints(from: videoURL)
+    /// // frameFeaturePrints is an array of VNFeaturePrintObservation, one for each frame
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter frameSpecification: Which frames to process (frame numbers, timestamps, or all frames)
+    /// - Returns: Array of feature print observations for each frame
+    /// - Throws: Error if video processing fails
+    public func extractVideoFeaturePrints(
+        from videoURL: URL,
+        frameSpecification: FrameSpecification = .allFrames
+    ) async throws -> [VNFeaturePrintObservation] {
+        // Get video asset and duration
+        let asset = AVAsset(url: videoURL)
+        let duration = try await asset.load(.duration)
+        let durationSeconds = CMTimeGetSeconds(duration)
+        
+        print("Video duration: \(String(format: "%.2f", durationSeconds)) seconds")
+        
+        // Determine which frames to process
+        let framesToProcess: [Int]
+        let frameTimestamps: [TimeInterval]
+        let fps: Double = 2.0 // Default FPS for video processing
+        
+        switch frameSpecification {
+        case .frameNumbers(let frameNumbers):
+            framesToProcess = frameNumbers.sorted()
+            frameTimestamps = frameNumbers.map { TimeInterval($0) / fps }
+            print("Processing specific frame numbers: \(frameNumbers)")
+            
+        case .timestamps(let timestamps):
+            let sortedTimestamps = timestamps.sorted()
+            framesToProcess = sortedTimestamps.map { Int($0 * fps) }
+            frameTimestamps = sortedTimestamps
+            print("Processing frames at timestamps: \(timestamps.map { String(format: "%.2f", $0) })")
+            
+        case .allFrames:
+            // Extract all frames as CIImage sequence
+            let ciImages = try await MediaProcessing.asCIImageSequence(
+                AVAsset(url: videoURL), 
+                samplesPerSecond: Int(fps)
+            )
+            
+            var frameFeaturePrints: [VNFeaturePrintObservation] = []
+            
+            // Process each frame
+            for (index, frameImage) in ciImages.enumerated() {
+                print("Processing frame \(index + 1)/\(ciImages.count)")
+                
+                let featurePrint = try extractFeaturePrint(from: frameImage)
+                frameFeaturePrints.append(featurePrint)
+            }
+            
+            print("Successfully extracted Vision feature prints for \(frameFeaturePrints.count) frames")
+            return frameFeaturePrints
+        }
+        
+        // Validate frame numbers
+        let maxFrameNumber = Int(durationSeconds * fps)
+        let validFrames = framesToProcess.filter { $0 >= 0 && $0 < maxFrameNumber }
+        
+        if validFrames.count != framesToProcess.count {
+            let invalidFrames = framesToProcess.filter { $0 < 0 || $0 >= maxFrameNumber }
+            print("Warning: Invalid frame numbers ignored: \(invalidFrames)")
+        }
+        
+        guard !validFrames.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid frames to process"])
+        }
+        
+        print("Processing \(validFrames.count) valid frames out of \(framesToProcess.count) requested")
+        
+        // Extract specific frames and generate feature prints
+        var frameFeaturePrints: [VNFeaturePrintObservation] = []
+        
+        for (index, frameNumber) in validFrames.enumerated() {
+            let timestamp = frameTimestamps[index]
+            print("Processing frame \(frameNumber) at timestamp \(String(format: "%.2f", timestamp))s (\(index + 1)/\(validFrames.count))")
+            
+            // Extract single frame at specific timestamp
+            let frameImage = try await extractFrameFromAsset(asset, at: timestamp)
+            
+            let featurePrint = try extractFeaturePrint(from: frameImage)
+            frameFeaturePrints.append(featurePrint)
+        }
+        
+        print("Successfully extracted Vision feature prints for \(frameFeaturePrints.count) specified frames")
+        return frameFeaturePrints
+    }
+
+    /// Calculate Vision feature print distances between specified frames and the first frame as reference
+    /// 
+    /// This function extracts Vision feature prints from specified frames of a video
+    /// and calculates distances between each frame and the first frame.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let processor = VisionProcessor()
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// 
+    /// // Calculate distances for specific frames
+    /// let distances = try await processor.calculateVideoFeaturePrintDistances(
+    ///     from: videoURL, 
+    ///     frameSpecification: .frameNumbers([0, 10, 20, 30])
+    /// )
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter frameSpecification: Which frames to process (frame numbers, timestamps, or all frames)
+    /// - Returns: Array of distance values for each frame (first frame will be 0.0)
+    /// - Throws: Error if video processing fails
+    public func calculateVideoFeaturePrintDistances(
+        from videoURL: URL,
+        frameSpecification: FrameSpecification = .allFrames
+    ) async throws -> [Float] {
+        // Extract Vision feature prints from specified frames
+        let frameFeaturePrints = try await extractVideoFeaturePrints(
+            from: videoURL,
+            frameSpecification: frameSpecification
+        )
+        
+        guard !frameFeaturePrints.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
+        }
+        
+        let referenceFeaturePrint = frameFeaturePrints[0]
+        var distances: [Float] = []
+        
+        // Calculate distance between each frame and the reference frame
+        for (index, featurePrint) in frameFeaturePrints.enumerated() {
+            let distance = try featurePrintDistance(referenceFeaturePrint, featurePrint)
+            distances.append(distance)
+            
+            print("Frame \(index + 1) Vision distance to reference: \(distance)")
+        }
+        
+        print("Successfully calculated Vision feature print distances for \(distances.count) frames")
+        return distances
+    }
+
+    /// Detect scene changes in a video using Vision framework feature prints
+    /// 
+    /// This function analyzes each frame of a video and detects scene changes
+    /// by comparing Vision feature prints between frames.
+    /// 
+    /// Example usage:
+    /// ```swift
+    /// let processor = VisionProcessor()
+    /// let videoURL = URL(fileURLWithPath: "video.mp4")
+    /// let sceneChanges = try await processor.detectSceneChanges(
+    ///     from: videoURL, 
+    ///     threshold: 0.5, 
+    ///     minSceneDuration: 2.0,
+    ///     maxSceneDuration: 15.0
+    /// )
+    /// // sceneChanges contains frame indices where scene changes occur
+    /// ```
+    /// 
+    /// - Parameter videoURL: The URL of the video file
+    /// - Parameter threshold: Feature print distance threshold for scene change detection (default: 0.5)
+    /// - Parameter minSceneDuration: Minimum scene duration in seconds (default: 2.0)
+    /// - Parameter maxSceneDuration: Maximum scene duration in seconds (default: 15.0)
+    /// - Returns: Array of frame indices where scene changes occur (including frame 0)
+    /// - Throws: Error if video processing fails
+    public func detectSceneChanges(
+        from videoURL: URL,
+        threshold: Float = 0.5,
+        minSceneDuration: TimeInterval = 2.0,
+        maxSceneDuration: TimeInterval = 15.0
+    ) async throws -> [(frameIndex: Int, timestamp: TimeInterval)] {
+        let startTime = Date()
+        
+        // Extract Vision feature prints from video at 2 FPS for scene detection
+        let frameFeaturePrints = try await extractVideoFeaturePrints(
+            from: videoURL,
+            frameSpecification: .allFrames
+        )
+        
+        guard !frameFeaturePrints.isEmpty else {
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "No frames extracted from video"])
+        }
+        
+        var sceneChanges: [(frameIndex: Int, timestamp: TimeInterval)] = [(0, 0.0)] // Always include frame 0 as first scene
+        var currentReferenceFeaturePrint = frameFeaturePrints[0]
+        var allDistances: [Float] = []
+        
+        print("Vision-based scene change detection with threshold: \(threshold), min scene duration: \(minSceneDuration)s, max scene duration: \(maxSceneDuration)s")
+        print("DEBUG: minSceneDuration = \(minSceneDuration), maxSceneDuration = \(maxSceneDuration)")
+        print("Frame 0 (0.0s): Starting new scene (reference frame)")
+        
+        // Analyze each frame starting from frame 1
+        for frameIndex in 1..<frameFeaturePrints.count {
+            let currentFeaturePrint = frameFeaturePrints[frameIndex]
+            let timestamp = TimeInterval(frameIndex) * 0.5 // 2 FPS = 0.5 seconds per frame
+            let timeSinceLastScene = timestamp - sceneChanges.last!.timestamp
+            
+            let distance = try featurePrintDistance(currentReferenceFeaturePrint, currentFeaturePrint)
+            allDistances.append(distance)
+            
+            print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): Vision distance to reference = \(String(format: "%.6f", distance)), time since last scene: \(String(format: "%.1f", timeSinceLastScene))s")
+            
+            var sceneChangeDetected = false
+            var sceneChangeReason = ""
+            
+            // Check if maximum scene duration has been exceeded
+            if timeSinceLastScene >= maxSceneDuration {
+                sceneChangeDetected = true
+                sceneChangeReason = "max duration exceeded"
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): FORCED SCENE CHANGE - Max duration exceeded (\(String(format: "%.1f", timeSinceLastScene))s >= \(maxSceneDuration)s)")
+            }
+            // Check if distance threshold is exceeded and minimum duration is met
+            else if distance > threshold && timeSinceLastScene >= minSceneDuration {
+                sceneChangeDetected = true
+                sceneChangeReason = "distance threshold"
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE DETECTED - Distance threshold exceeded (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
+            }
+            // Check if distance threshold is exceeded but minimum duration is not met
+            else if distance > threshold && timeSinceLastScene < minSceneDuration {
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): Scene change ignored - too short (duration: \(String(format: "%.1f", timeSinceLastScene))s < \(minSceneDuration)s)")
+            }
+            
+            if sceneChangeDetected {
+                sceneChanges.append((frameIndex: frameIndex, timestamp: timestamp))
+                currentReferenceFeaturePrint = currentFeaturePrint
+                print("Frame \(frameIndex) (\(String(format: "%.1f", timestamp))s): SCENE CHANGE APPLIED - \(sceneChangeReason) (duration: \(String(format: "%.1f", timeSinceLastScene))s)")
+            }
+        }
+        
+        let endTime = Date()
+        let duration = endTime.timeIntervalSince(startTime)
+        
+        print("Vision-based scene change detection complete!")
+        print("Total scenes detected: \(sceneChanges.count)")
+        print("Scene changes at frames and timestamps:")
+        for (frameIndex, timestamp) in sceneChanges {
+            print("  Frame \(frameIndex): \(String(format: "%.1f", timestamp))s")
+        }
+        print("Total processing time: \(String(format: "%.2f", duration)) seconds")
+        print("Average time per frame: \(String(format: "%.3f", duration / Double(frameFeaturePrints.count))) seconds")
+        
+        return sceneChanges
+    }
+}
+
+// MARK: - Frame Specification
+
+/// Specification for which frames to process in video operations
+public enum FrameSpecification {
+    case allFrames
+    case frameNumbers([Int])
+    case timestamps([TimeInterval])
+}
+
+// MARK: - Helper Functions
+
+/// Extract a single frame from an AVAsset at a specific timestamp
+private func extractFrameFromAsset(_ asset: AVAsset, at timestamp: TimeInterval) async throws -> CIImage {
+    let imageGenerator = AVAssetImageGenerator(asset: asset)
+    imageGenerator.appliesPreferredTrackTransform = true
+    imageGenerator.requestedTimeToleranceBefore = .zero
+    imageGenerator.requestedTimeToleranceAfter = .zero
+    
+    let time = CMTime(seconds: timestamp, preferredTimescale: 600)
+    
+    do {
+        let cgImage = try await imageGenerator.image(at: time).image
+        let ciImage = CIImage(cgImage: cgImage)
+        return ciImage
+    } catch {
+        throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to extract frame at timestamp \(timestamp): \(error.localizedDescription)"])
+    }
+}
+
+
