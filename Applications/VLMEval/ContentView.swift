@@ -790,8 +790,8 @@ class VLMEvaluator {
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
-//    let modelConfiguration = VLMRegistry.smolvlm
-    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
+    let modelConfiguration = VLMRegistry.smolvlm
+//    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
 
     /// parameters controlling the output – use values appropriate for the model selected above
     let generateParameters = MLXLMCommon.GenerateParameters(

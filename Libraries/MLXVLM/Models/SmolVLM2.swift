@@ -5,6 +5,7 @@
 //  Created by Pedro Cuenca on 20/3/25.
 //
 
+import AVFoundation
 import CoreImage
 import CoreMedia
 import Foundation
@@ -12,10 +13,67 @@ import MLX
 import MLXLMCommon
 import Tokenizers
 
+// MARK: - SmolVLM2 with FrameSpecification Support
+//
+// SmolVLM2 now supports selective video frame processing through the FrameSpecification enum.
+// This allows you to process only specific frames from a video, which can be useful for:
+// - Reducing processing time for long videos
+// - Focusing on key moments or scenes
+// - Analyzing specific timestamps or frame numbers
+//
+// Example usage:
+// ```swift
+// let processor = SmolVLMProcessor(config, tokenizer: tokenizer)
+// 
+// // Process all frames (default behavior)
+// let allFramesInput = try await processor.prepare(input: userInput)
+// 
+// // Process specific frame numbers (0-based indexing)
+// let specificFramesInput = try await processor.prepare(
+//     input: userInput, 
+//     frameSpecification: .frameNumbers([0, 10, 20, 30])
+// )
+// 
+// // Process frames at specific timestamps (in seconds)
+// let timestampFramesInput = try await processor.prepare(
+//     input: userInput, 
+//     frameSpecification: .timestamps([0.0, 5.0, 10.0, 15.0])
+// )
+// 
+// // Process all frames explicitly
+// let allFramesInput = try await processor.prepare(
+//     input: userInput, 
+//     frameSpecification: .allFrames
+// )
+// ```
+//
+// FrameSpecification options:
+// - `.allFrames`: Process all frames in the video (default behavior)
+// - `.frameNumbers([Int])`: Process specific frame numbers (0-based indexing)
+// - `.timestamps([TimeInterval])`: Process frames at specific timestamps (in seconds)
+//
+// Notes:
+// - Frame numbers are validated against video duration and FPS
+// - Timestamps are validated against video duration
+// - Invalid frame numbers or timestamps are automatically filtered out
+// - The processor will log which frames are being processed for debugging
+
 // MARK: - Configuration and modeling are Idefics3
 
 typealias SmolVLM2Configuration = Idefics3Configuration
 typealias SmolVLM2 = Idefics3
+
+// MARK: - Frame Specification
+
+/// Frame specification for selective video processing
+public enum FrameSpecification {
+    /// Process specific frame numbers (0-based indexing)
+    case frameNumbers([Int])
+    /// Process frames at specific timestamps (in seconds)
+    case timestamps([TimeInterval])
+    /// Process all frames (default behavior)
+    case allFrames
+}
 
 // MARK: - SmolVLMProcessor and configuration
 
@@ -221,6 +279,11 @@ public class SmolVLMProcessor: UserInputProcessor {
     }
 
     public func prepare(input: UserInput) async throws -> LMInput {
+        // Default to processing all frames
+        return try await prepare(input: input, frameSpecification: .allFrames)
+    }
+    
+    public func prepare(input: UserInput, frameSpecification: FrameSpecification) async throws -> LMInput {
         let messages = Qwen2VLMessageGenerator().generate(from: input)  // TODO: Create SmolVLM2MessageGenerator
 
         if input.images.isEmpty && input.videos.isEmpty {
@@ -310,21 +373,111 @@ public class SmolVLMProcessor: UserInputProcessor {
 
             var video = try input.videos[0].asAVAsset()
 
-            let processedFrames = await try MediaProcessing.asProcessedSequence(
-                video,
-                maxFrames: maxVideoFrames,
-                targetFPS: { duration in
-                    // 1 fps for duration >= 10s, apply a multiplier if smaller
-                    max((10 - 0.9 * duration.seconds) * targetVideoFPS, 1)
+            // Handle frame specification for selective video processing
+            let processedFrames: ProcessedFrames
+            switch frameSpecification {
+            case .allFrames:
+                // Process all frames as before
+                processedFrames = await try MediaProcessing.asProcessedSequence(
+                    video,
+                    maxFrames: maxVideoFrames,
+                    targetFPS: { duration in
+                        // 1 fps for duration >= 10s, apply a multiplier if smaller
+                        max((10 - 0.9 * duration.seconds) * targetVideoFPS, 1)
+                    }
+                ) { frame in
+                    let processedFrame = frame.frame
+                        .toSRGB()
+                        .resampled(
+                            to: CGSize(width: fixedImageSize, height: fixedImageSize), method: .lanczos
+                        )
+                        .normalized(mean: config.imageMeanTuple, std: config.imageStdTuple)
+                    return VideoFrame(frame: processedFrame, timeStamp: frame.timeStamp)
                 }
-            ) { frame in
-                let processedFrame = frame.frame
-                    .toSRGB()
-                    .resampled(
-                        to: CGSize(width: fixedImageSize, height: fixedImageSize), method: .lanczos
-                    )
-                    .normalized(mean: config.imageMeanTuple, std: config.imageStdTuple)
-                return VideoFrame(frame: processedFrame, timeStamp: frame.timeStamp)
+                
+            case .frameNumbers(let frameNumbers):
+                // Process specific frame numbers
+                let sortedFrameNumbers = frameNumbers.sorted()
+                let duration = try await video.load(.duration)
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let maxFrameNumber = Int(durationSeconds * targetVideoFPS)
+                
+                let validFrames = sortedFrameNumbers.filter { $0 >= 0 && $0 < maxFrameNumber }
+                print("SmolVLM2: Processing specific frame numbers: \(validFrames)")
+                
+                var selectedFrames: [MLXArray] = []
+                var selectedTimestamps: [CMTime] = []
+                
+                for frameNumber in validFrames {
+                    let timestamp = TimeInterval(frameNumber) / targetVideoFPS
+                    let time = CMTime(seconds: timestamp, preferredTimescale: 600)
+                    
+                    // Extract frame using AVAssetImageGenerator
+                    let generator = AVAssetImageGenerator(asset: video)
+                    generator.appliesPreferredTrackTransform = true
+                    generator.requestedTimeToleranceBefore = .zero
+                    generator.requestedTimeToleranceAfter = .zero
+                    
+                    let cgImage = try await generator.image(at: time).image
+                    let frameImage = CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+                    
+                    let processedFrame = frameImage
+                        .toSRGB()
+                        .resampled(
+                            to: CGSize(width: fixedImageSize, height: fixedImageSize), method: .lanczos
+                        )
+                        .normalized(mean: config.imageMeanTuple, std: config.imageStdTuple)
+                    
+                    selectedFrames.append(processedFrame.asMLXArray())
+                    selectedTimestamps.append(time)
+                }
+                
+                processedFrames = ProcessedFrames(
+                    frames: selectedFrames,
+                    timestamps: selectedTimestamps,
+                    totalDuration: duration
+                )
+                
+            case .timestamps(let timestamps):
+                // Process frames at specific timestamps
+                let sortedTimestamps = timestamps.sorted()
+                let duration = try await video.load(.duration)
+                let durationSeconds = CMTimeGetSeconds(duration)
+                
+                let validTimestamps = sortedTimestamps.filter { $0 >= 0 && $0 <= durationSeconds }
+                print("SmolVLM2: Processing frames at timestamps: \(validTimestamps.map { String(format: "%.2f", $0) })")
+                
+                var selectedFrames: [MLXArray] = []
+                var selectedTimestamps: [CMTime] = []
+                
+                for timestamp in validTimestamps {
+                    let time = CMTime(seconds: timestamp, preferredTimescale: 600)
+                    
+                    // Extract frame using AVAssetImageGenerator
+                    let generator = AVAssetImageGenerator(asset: video)
+                    generator.appliesPreferredTrackTransform = true
+                    generator.requestedTimeToleranceBefore = .zero
+                    generator.requestedTimeToleranceAfter = .zero
+                    
+                    let cgImage = try await generator.image(at: time).image
+                    let frameImage = CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+                    
+                    let processedFrame = frameImage
+                        .toSRGB()
+                        .resampled(
+                            to: CGSize(width: fixedImageSize, height: fixedImageSize), method: .lanczos
+                        )
+                        .normalized(mean: config.imageMeanTuple, std: config.imageStdTuple)
+                    
+                    selectedFrames.append(processedFrame.asMLXArray())
+                    selectedTimestamps.append(time)
+                }
+                
+                processedFrames = ProcessedFrames(
+                    frames: selectedFrames,
+                    timestamps: selectedTimestamps,
+                    totalDuration: duration
+                )
             }
 
             let thwFrames = (0 ..< processedFrames.frames.count).map {
