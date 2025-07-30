@@ -787,6 +787,17 @@ class VLMEvaluator {
             return .timestamps(times)
         }
     }
+    
+    private func convertToSmolVLM2FrameSpecification(_ frameSpec: FrameSpecification) -> MLXVLM.FrameSpecification {
+        switch frameSpec {
+        case .allFrames:
+            return .allFrames
+        case .frameNumbers(let numbers):
+            return .frameNumbers(numbers)
+        case .timestamps(let times):
+            return .timestamps(times)
+        }
+    }
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
@@ -902,8 +913,11 @@ class VLMEvaluator {
 
                 let lmInput: LMInput
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor, videoURL != nil {
-                    // Use frame specification for video processing
+                    // Use frame specification for video processing with Qwen2VL
                     lmInput = try await qwen2vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification))
+                } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor, videoURL != nil {
+                    // Use frame specification for video processing with SmolVLM2
+                    lmInput = try await smolVLMProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToSmolVLM2FrameSpecification(frameSpecification))
                 } else {
                     // Use regular prepare for images or no media
                     lmInput = try await context.processor.prepare(input: userInput)

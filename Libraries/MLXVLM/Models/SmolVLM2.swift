@@ -283,6 +283,15 @@ public class SmolVLMProcessor: UserInputProcessor {
         return try await prepare(input: input, frameSpecification: .allFrames)
     }
     
+    /// Prepare input with specific frame specification for selective video processing
+    /// - Parameters:
+    ///   - input: The user input containing text, images, and/or videos
+    ///   - frameSpecification: The frame specification for video processing
+    /// - Returns: Prepared LMInput ready for model inference
+    public func prepareWithFrameSpecification(input: UserInput, frameSpecification: FrameSpecification) async throws -> LMInput {
+        return try await prepare(input: input, frameSpecification: frameSpecification)
+    }
+    
     public func prepare(input: UserInput, frameSpecification: FrameSpecification) async throws -> LMInput {
         let messages = Qwen2VLMessageGenerator().generate(from: input)  // TODO: Create SmolVLM2MessageGenerator
 
@@ -377,7 +386,9 @@ public class SmolVLMProcessor: UserInputProcessor {
             let processedFrames: ProcessedFrames
             switch frameSpecification {
             case .allFrames:
+                print("SmolVLM2: Using ALL FRAMES processing mode")
                 // Process all frames as before
+                var frameCounter = 0
                 processedFrames = await try MediaProcessing.asProcessedSequence(
                     video,
                     maxFrames: maxVideoFrames,
@@ -386,6 +397,12 @@ public class SmolVLMProcessor: UserInputProcessor {
                         max((10 - 0.9 * duration.seconds) * targetVideoFPS, 1)
                     }
                 ) { frame in
+                    // Log frame information
+                    let timestamp = frame.timeStamp
+                    let size = frame.frame.extent.size
+                    print("SmolVLM2: Processing frame \(frameCounter) at \(formatTimestamp(timestamp)) (size: \(Int(size.width))x\(Int(size.height)))")
+                    frameCounter += 1
+                    
                     let processedFrame = frame.frame
                         .toSRGB()
                         .resampled(
@@ -396,6 +413,7 @@ public class SmolVLMProcessor: UserInputProcessor {
                 }
                 
             case .frameNumbers(let frameNumbers):
+                print("SmolVLM2: Using FRAME NUMBERS processing mode")
                 // Process specific frame numbers
                 let sortedFrameNumbers = frameNumbers.sorted()
                 let duration = try await video.load(.duration)
@@ -421,6 +439,10 @@ public class SmolVLMProcessor: UserInputProcessor {
                     let cgImage = try await generator.image(at: time).image
                     let frameImage = CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
                     
+                    // Log frame information
+                    let size = frameImage.extent.size
+                    print("SmolVLM2: Processing frame \(frameNumber) at \(formatTimestamp(time)) (size: \(Int(size.width))x\(Int(size.height)))")
+                    
                     let processedFrame = frameImage
                         .toSRGB()
                         .resampled(
@@ -439,6 +461,7 @@ public class SmolVLMProcessor: UserInputProcessor {
                 )
                 
             case .timestamps(let timestamps):
+                print("SmolVLM2: Using TIMESTAMPS processing mode")
                 // Process frames at specific timestamps
                 let sortedTimestamps = timestamps.sorted()
                 let duration = try await video.load(.duration)
@@ -450,7 +473,7 @@ public class SmolVLMProcessor: UserInputProcessor {
                 var selectedFrames: [MLXArray] = []
                 var selectedTimestamps: [CMTime] = []
                 
-                for timestamp in validTimestamps {
+                for (index, timestamp) in validTimestamps.enumerated() {
                     let time = CMTime(seconds: timestamp, preferredTimescale: 600)
                     
                     // Extract frame using AVAssetImageGenerator
@@ -461,6 +484,10 @@ public class SmolVLMProcessor: UserInputProcessor {
                     
                     let cgImage = try await generator.image(at: time).image
                     let frameImage = CIImage(cgImage: cgImage, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+                    
+                    // Log frame information
+                    let size = frameImage.extent.size
+                    print("SmolVLM2: Processing frame \(index) at \(formatTimestamp(time)) (size: \(Int(size.width))x\(Int(size.height)))")
                     
                     let processedFrame = frameImage
                         .toSRGB()
