@@ -103,12 +103,35 @@ public struct SmolVLMProcessorConfiguration: Codable, Sendable {
     public let maxImageSize: Size
     public let videoSampling: VideoSampling
     private let _imageSequenceLength: Int?
+    
+    // Additional configuration properties for video processing
+    private var _maxFrames: Int?
+    private var _fps: Double?
+    
     // TODO: this does not come in preprocessor_config.json, verify where transformers gets it from
     public var imageSequenceLength: Int { _imageSequenceLength ?? 64 }
+    
+    public var maxFrames: Int {
+        get {
+            _maxFrames ?? videoSampling.maxFrames
+        }
+        set {
+            _maxFrames = newValue
+        }
+    }
+    
+    public var fps: Double {
+        get {
+            _fps ?? Double(videoSampling.fps)
+        }
+        set {
+            _fps = newValue
+        }
+    }
 
     init(
         imageMean: [CGFloat], imageStd: [CGFloat], size: Size, maxImageSize: Size,
-        videoSampling: VideoSampling, imageSequenceLength: Int?
+        videoSampling: VideoSampling, imageSequenceLength: Int?, maxFrames: Int? = nil, fps: Double? = nil
     ) {
         self.imageMean = imageMean
         self.imageStd = imageStd
@@ -116,6 +139,8 @@ public struct SmolVLMProcessorConfiguration: Codable, Sendable {
         self.maxImageSize = maxImageSize
         self.videoSampling = videoSampling
         self._imageSequenceLength = imageSequenceLength
+        self._maxFrames = maxFrames
+        self._fps = fps
     }
 
     public var imageMeanTuple: (CGFloat, CGFloat, CGFloat) {
@@ -132,11 +157,13 @@ public struct SmolVLMProcessorConfiguration: Codable, Sendable {
         case maxImageSize = "max_image_size"
         case videoSampling = "video_sampling"
         case _imageSequenceLength = "image_seq_len"
+        case _maxFrames = "max_frames"
+        case _fps = "fps"
     }
 }
 
 public class SmolVLMProcessor: UserInputProcessor {
-    private let config: SmolVLMProcessorConfiguration
+    public var config: SmolVLMProcessorConfiguration
     private let tokenizer: any Tokenizer
 
     // FIXME: hardcoded values for now
@@ -150,9 +177,9 @@ public class SmolVLMProcessor: UserInputProcessor {
     var maxProcessingImageSize: CGFloat { CGFloat(config.size.longestEdge) }  // 2048
     var fixedImageSize: CGFloat { CGFloat(config.maxImageSize.longestEdge) }  // 384 for big models, 512 for small models (200-500M)
     var imageSequenceLength: Int { config.imageSequenceLength }
-    var maxVideoFrames: Int { 20 /*config.videoSampling.maxFrames*/ }
-    var targetVideoFPS: Double { Double(config.videoSampling.fps) }
-
+    var maxVideoFrames: Int { config.maxFrames }
+    var targetVideoFPS: Double { config.fps }
+    
     let defaultVideoSystemMessage =
         "You are a helpful assistant that can understand videos. Describe what type of video this is and what's happening in it."
 
@@ -162,6 +189,14 @@ public class SmolVLMProcessor: UserInputProcessor {
     ) {
         self.config = config
         self.tokenizer = tokenizer
+        print("SmolVLM2 Configuration:")
+        print("  maxProcessingImageSize: \(maxProcessingImageSize)")
+        print("  fixedImageSize: \(fixedImageSize)")
+        print("  imageSequenceLength: \(imageSequenceLength)")
+        print("  maxVideoFrames: \(maxVideoFrames)")
+        print("  targetVideoFPS: \(targetVideoFPS)")
+        print("  config.maxFrames: \(config.maxFrames)")
+        print("  config.fps: \(config.fps)")
     }
 
     func getVideoPromptString(
@@ -400,7 +435,7 @@ public class SmolVLMProcessor: UserInputProcessor {
                     // Log frame information
                     let timestamp = frame.timeStamp
                     let size = frame.frame.extent.size
-                    print("SmolVLM2: Processing frame \(frameCounter) at \(formatTimestamp(timestamp)) (size: \(Int(size.width))x\(Int(size.height)))")
+//                    print("SmolVLM2: Processing frame \(frameCounter) at \(formatTimestamp(timestamp)) (size: \(Int(size.width))x\(Int(size.height)))")
                     frameCounter += 1
                     
                     let processedFrame = frame.frame
@@ -409,6 +444,7 @@ public class SmolVLMProcessor: UserInputProcessor {
                             to: CGSize(width: fixedImageSize, height: fixedImageSize), method: .lanczos
                         )
                         .normalized(mean: config.imageMeanTuple, std: config.imageStdTuple)
+                    print("SmolVLM2: Processing frame \(frameCounter) at \(formatTimestamp(timestamp)) (size: \(Int(fixedImageSize))x\(Int(fixedImageSize)))")
                     return VideoFrame(frame: processedFrame, timeStamp: frame.timeStamp)
                 }
                 

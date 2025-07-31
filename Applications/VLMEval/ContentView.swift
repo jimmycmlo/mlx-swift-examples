@@ -843,6 +843,11 @@ class VLMEvaluator {
                     qwen2vlProcessor.config.maxFrames = 32
                     // Set FPS for video sampling
                     qwen2vlProcessor.config.fps = 1.0
+                } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor {
+                    // Set maxFrames for video processing
+                    smolVLMProcessor.config.maxFrames = 32
+                    // Set FPS for video sampling
+                    smolVLMProcessor.config.fps = 1.0
                 }
             }
 
