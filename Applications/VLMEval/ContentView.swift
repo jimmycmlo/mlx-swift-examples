@@ -865,7 +865,7 @@ class VLMEvaluator {
         }
     }
 
-    private func generate(prompt: String, image: CIImage?, videoURL: URL?, frameSpecification: FrameSpecification = .allFrames) async {
+    private func generate(prompt: String, image: CIImage?, videoURL: URL?, video: AVAsset?, frameSpecification: FrameSpecification = .allFrames) async {
 
         self.output = ""
 
@@ -875,16 +875,14 @@ class VLMEvaluator {
             // Set pixel limits based on media type
             await modelContainer.update { context in
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor {
-                    if videoURL != nil {
+                    if (videoURL != nil) || (video != nil) {
                         // For videos: lower pixel limits
-//                        qwen2vlProcessor.config.maxPixels = 256 * 28 * 28  // 200,704
-//                        qwen2vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
-                        qwen2vlProcessor.config.maxPixels = 1024 * 28 * 28  // 401,408
-                        qwen2vlProcessor.config.minPixels = 256 * 28 * 28  // 200,704
+                        qwen2vlProcessor.config.maxPixels = 128 * 28 * 28  // 200,704
+                        qwen2vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
                     } else if image != nil {
                         // For images: higher pixel limits
-                        qwen2vlProcessor.config.maxPixels = 1024 * 28 * 28  // 401,408
-                        qwen2vlProcessor.config.minPixels = 256 * 28 * 28  // 200,704
+                        qwen2vlProcessor.config.maxPixels = 512 * 28 * 28  // 401,408
+                        qwen2vlProcessor.config.minPixels = 128 * 28 * 28  // 200,704
                     }
                 }
             }
@@ -960,7 +958,7 @@ class VLMEvaluator {
         prompt = ""
         generationTask = Task {
             running = true
-            await generate(prompt: currentPrompt, image: image, videoURL: videoURL, frameSpecification: frameSpecification)
+            await generate(prompt: currentPrompt, image: image, videoURL: videoURL, video: nil, frameSpecification: frameSpecification)
             running = false
         }
     }
