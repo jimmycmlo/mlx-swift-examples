@@ -798,11 +798,23 @@ class VLMEvaluator {
             return .timestamps(times)
         }
     }
+    
+    private func convertToQwen25VLFrameSpecification(_ frameSpec: FrameSpecification) -> Qwen25VL.FrameSpecification {
+        switch frameSpec {
+        case .allFrames:
+            return .allFrames
+        case .frameNumbers(let numbers):
+            return .frameNumbers(numbers)
+        case .timestamps(let times):
+            return .timestamps(times)
+        }
+    }
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
-    let modelConfiguration = VLMRegistry.smolvlm
-//    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
+//    let modelConfiguration = VLMRegistry.smolvlm
+//    let modelConfiguration = VLMRegistry.qwen2_5VL3BInstruct4Bit
+    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
 
     /// parameters controlling the output – use values appropriate for the model selected above
     let generateParameters = MLXLMCommon.GenerateParameters(
@@ -843,6 +855,11 @@ class VLMEvaluator {
                     qwen2vlProcessor.config.maxFrames = 32
                     // Set FPS for video sampling
                     qwen2vlProcessor.config.fps = 1.0
+                } else if let qwen25vlProcessor = context.processor as? Qwen25VLProcessor {
+                    // Set maxFrames for video processing
+                    qwen25vlProcessor.config.maxFrames = 32
+                    // Set FPS for video sampling
+                    qwen25vlProcessor.config.fps = 1.0
                 } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor {
                     // Set maxFrames for video processing
                     smolVLMProcessor.config.maxFrames = 32
@@ -918,6 +935,9 @@ class VLMEvaluator {
                 if let qwen2vlProcessor = context.processor as? Qwen2VLProcessor, videoURL != nil {
                     // Use frame specification for video processing with Qwen2VL
                     lmInput = try await qwen2vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification))
+                } else if let qwen25vlProcessor = context.processor as? Qwen25VLProcessor, videoURL != nil {
+                    // Use frame specification for video processing with Qwen25VL
+                    lmInput = try await qwen25vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen25VLFrameSpecification(frameSpecification))
                 } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor, videoURL != nil {
                     // Use frame specification for video processing with SmolVLM2
                     lmInput = try await smolVLMProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToSmolVLM2FrameSpecification(frameSpecification))
@@ -1095,23 +1115,25 @@ class VLMEvaluator {
             let modelContainer = try await load()
             
             let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
+                if let qwen2VL = context.model as? Qwen2VL {
+                    guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen2VLProcessor"
+                    }
+                    
+                    let frameEmbeddings = try await qwen2VL.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
+                    for (index, embedding) in frameEmbeddings.enumerated() {
+                        output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                    }
+                    
+                    return output
+                } else if let qwen25VL = context.model as? Qwen25VL {
+                    return "Video patch extraction not yet implemented for Qwen25VL"
+                } else {
+                    return "Error: Model is not Qwen2VL or Qwen25VL"
                 }
-                
-                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
-                    return "Error: Processor is not Qwen2VLProcessor"
-                }
-                
-                let frameEmbeddings = try await qwen2VL.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
-                
-                var output = "Frame specification: \(frameSpecification)\n"
-                output += "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
-                for (index, embedding) in frameEmbeddings.enumerated() {
-                    output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
-                }
-                
-                return output
             }
             
             self.output = result
@@ -1136,23 +1158,25 @@ class VLMEvaluator {
             let modelContainer = try await load()
             
             let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
+                if let qwen2VL = context.model as? Qwen2VL {
+                    guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen2VLProcessor"
+                    }
+                    
+                    let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
+                    for (index, embedding) in frameEmbeddings.enumerated() {
+                        output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                    }
+                    
+                    return output
+                } else if let qwen25VL = context.model as? Qwen25VL {
+                    return "Video mean pooling not yet implemented for Qwen25VL"
+                } else {
+                    return "Error: Model is not Qwen2VL or Qwen25VL"
                 }
-                
-                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
-                    return "Error: Processor is not Qwen2VLProcessor"
-                }
-                
-                let frameEmbeddings = try await qwen2VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
-                
-                var output = "Frame specification: \(frameSpecification)\n"
-                output += "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
-                for (index, embedding) in frameEmbeddings.enumerated() {
-                    output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
-                }
-                
-                return output
             }
             
             self.output = result
@@ -1177,34 +1201,36 @@ class VLMEvaluator {
             let modelContainer = try await load()
             
             let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
+                if let qwen2VL = context.model as? Qwen2VL {
+                    guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen2VLProcessor"
+                    }
+                    
+                    let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Cosine distances to reference frame (Frame 1):\n"
+                    for (index, distance) in distances.enumerated() {
+                        output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
+                    }
+                    
+                    // Add summary statistics
+                    let minDistance = distances.min() ?? 0.0
+                    let maxDistance = distances.max() ?? 0.0
+                    let avgDistance = distances.reduce(0, +) / Float(distances.count)
+                    
+                    output += "\nSummary:\n"
+                    output += "Min distance: \(String(format: "%.4f", minDistance))\n"
+                    output += "Max distance: \(String(format: "%.4f", maxDistance))\n"
+                    output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
+                    output += "Total frames: \(distances.count)\n"
+                    
+                    return output
+                } else if let qwen25VL = context.model as? Qwen25VL {
+                    return "Video similarity calculation not yet implemented for Qwen25VL"
+                } else {
+                    return "Error: Model is not Qwen2VL or Qwen25VL"
                 }
-                
-                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
-                    return "Error: Processor is not Qwen2VLProcessor"
-                }
-                
-                let distances = try await qwen2VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: convertToQwen2VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
-                
-                var output = "Frame specification: \(frameSpecification)\n"
-                output += "Cosine distances to reference frame (Frame 1):\n"
-                for (index, distance) in distances.enumerated() {
-                    output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
-                }
-                
-                // Add summary statistics
-                let minDistance = distances.min() ?? 0.0
-                let maxDistance = distances.max() ?? 0.0
-                let avgDistance = distances.reduce(0, +) / Float(distances.count)
-                
-                output += "\nSummary:\n"
-                output += "Min distance: \(String(format: "%.4f", minDistance))\n"
-                output += "Max distance: \(String(format: "%.4f", maxDistance))\n"
-                output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
-                output += "Total frames: \(distances.count)\n"
-                
-                return output
             }
             
             self.output = result
@@ -1229,13 +1255,10 @@ class VLMEvaluator {
             let modelContainer = try await load()
             
             let result = try await modelContainer.perform { (context: ModelContext) -> String in
-                guard let qwen2VL = context.model as? Qwen2VL else {
-                    return "Error: Model is not Qwen2VL"
-                }
-                
-                guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
-                    return "Error: Processor is not Qwen2VLProcessor"
-                }
+                if let qwen2VL = context.model as? Qwen2VL {
+                    guard let processorConfig = (context.processor as? Qwen2VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen2VLProcessor"
+                    }
                 
                 let startTime = Date()
                 let sceneChanges = try await qwen2VL.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration), processorConfig: processorConfig)
@@ -1273,6 +1296,11 @@ class VLMEvaluator {
                 }
                 
                 return output
+                } else if let qwen25VL = context.model as? Qwen25VL {
+                    return "Scene change detection not yet implemented for Qwen25VL"
+                } else {
+                    return "Error: Model is not Qwen2VL or Qwen25VL"
+                }
             }
             
             self.output = result
