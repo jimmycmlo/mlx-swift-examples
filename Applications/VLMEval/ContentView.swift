@@ -901,6 +901,16 @@ class VLMEvaluator {
                         qwen2vlProcessor.config.maxPixels = 512 * 28 * 28  // 401,408
                         qwen2vlProcessor.config.minPixels = 128 * 28 * 28  // 200,704
                     }
+                } else if let qwen25vlProcessor = context.processor as? Qwen25VLProcessor {
+                    if (videoURL != nil) || (video != nil) {
+                        // For videos: lower pixel limits
+                        qwen25vlProcessor.config.maxPixels = 128 * 28 * 28  // 200,704
+                        qwen25vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
+                    } else if image != nil {
+                        // For images: higher pixel limits
+                        qwen25vlProcessor.config.maxPixels = 512 * 28 * 28  // 401,408
+                        qwen25vlProcessor.config.minPixels = 128 * 28 * 28  // 200,704
+                    }
                 }
             }
 

@@ -704,7 +704,7 @@ public class Qwen25VLProcessor: UserInputProcessor {
         let (resizedHeight, resizedWidth) = try QwenVL.targetSize(
             height: Int(size.height), width: Int(size.width),
             factor: config.patchSize * config.mergeSize,
-            minPixels: config.size.minPixels, maxPixels: config.size.maxPixels)
+            minPixels: config.minPixels, maxPixels: config.maxPixels)
         let resizedSize = CGSize(width: resizedWidth, height: resizedHeight)
 
         // Process images
@@ -1151,7 +1151,7 @@ public class Qwen25VL: Module, VLMModel, KVCacheDimensionProvider {
         case .timestamps(let timestamps):
             // For timestamps, we assume the frames are evenly distributed
             // This is a simplified implementation - in practice, you'd want to map timestamps to actual frame indices
-            let frameNumbers = timestamps.map { Int($0 * 30) } // Assuming 30 fps
+            let frameNumbers = timestamps.map { Int($0 * 2.0) } // Default 2 FPS for timestamp conversion
             return try applyFrameSpecificationToVideo(
                 videoPixels: videoPixels, 
                 videoFrames: videoFrames,
