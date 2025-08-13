@@ -1091,7 +1091,7 @@ public class Qwen25VL: Module, VLMModel, KVCacheDimensionProvider {
     /// - Parameter frameSpecification: Which frames to process (frame numbers, timestamps, or all frames)
     /// - Returns: The prepared result with selective frame processing
     /// - Throws: VLMError if video processing fails
-    public func prepareWithFrameSpecification(_ input: LMInput, cache: [any KVCache], windowSize: Int?, frameSpecification: FrameSpecification) throws -> PrepareResult {
+    public func prepareWithFrameSpecification(_ input: LMInput, cache: [any KVCache], windowSize: Int?, frameSpecification: FrameSpecification, fps: Double = 2.0) throws -> PrepareResult {
         let dtype = visionModel.patchEmbed.proj.weight.dtype
 
         // Process both images and videos together
@@ -1108,7 +1108,8 @@ public class Qwen25VL: Module, VLMModel, KVCacheDimensionProvider {
             let (filteredPixels, filteredFrames) = try applyFrameSpecificationToVideo(
                 videoPixels: videoPixels, 
                 videoFrames: videoFrames,
-                frameSpecification: frameSpecification
+                frameSpecification: frameSpecification,
+                fps: fps
             )
             
             if allPixels == nil {
@@ -1132,7 +1133,8 @@ public class Qwen25VL: Module, VLMModel, KVCacheDimensionProvider {
     private func applyFrameSpecificationToVideo(
         videoPixels: MLXArray, 
         videoFrames: [THW],
-        frameSpecification: FrameSpecification
+        frameSpecification: FrameSpecification,
+        fps: Double
     ) throws -> (MLXArray, [THW]) {
         switch frameSpecification {
         case .allFrames:
@@ -1151,11 +1153,12 @@ public class Qwen25VL: Module, VLMModel, KVCacheDimensionProvider {
         case .timestamps(let timestamps):
             // For timestamps, we assume the frames are evenly distributed
             // This is a simplified implementation - in practice, you'd want to map timestamps to actual frame indices
-            let frameNumbers = timestamps.map { Int($0 * 2.0) } // Default 2 FPS for timestamp conversion
+            let frameNumbers = timestamps.map { Int($0 * fps) } // Use provided FPS for timestamp conversion
             return try applyFrameSpecificationToVideo(
                 videoPixels: videoPixels, 
                 videoFrames: videoFrames,
-                frameSpecification: .frameNumbers(frameNumbers)
+                frameSpecification: .frameNumbers(frameNumbers),
+                fps: fps
             )
         }
     }
