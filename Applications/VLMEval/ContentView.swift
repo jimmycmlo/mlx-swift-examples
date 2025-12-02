@@ -809,12 +809,24 @@ class VLMEvaluator {
             return .timestamps(times)
         }
     }
+    
+    private func convertToQwen3VLFrameSpecification(_ frameSpec: FrameSpecification) -> Qwen3VL.FrameSpecification {
+        switch frameSpec {
+        case .allFrames:
+            return .allFrames
+        case .frameNumbers(let numbers):
+            return .frameNumbers(numbers)
+        case .timestamps(let times):
+            return .timestamps(times)
+        }
+    }
 
     /// This controls which model loads. `smolvlm` is very small even unquantized, so it will fit on
     /// more devices.
 //    let modelConfiguration = VLMRegistry.smolvlm
 //    let modelConfiguration = VLMRegistry.qwen2_5VL3BInstruct4Bit
-    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
+//    let modelConfiguration = VLMRegistry.qwen2VL2BInstruct4Bit
+    let modelConfiguration = VLMRegistry.qwen3VL2BInstruct4Bit
 
     /// parameters controlling the output – use values appropriate for the model selected above
     let generateParameters = MLXLMCommon.GenerateParameters(
@@ -860,6 +872,11 @@ class VLMEvaluator {
                     qwen25vlProcessor.config.maxFrames = 32
                     // Set FPS for video sampling
                     qwen25vlProcessor.config.fps = 1.0
+                } else if let qwen3vlProcessor = context.processor as? Qwen3VLProcessor {
+                    // Set maxFrames for video processing
+                    qwen3vlProcessor.config.maxFrames = 32
+                    // Set FPS for video sampling
+                    qwen3vlProcessor.config.fps = 1.0
                 } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor {
                     // Set maxFrames for video processing
                     smolVLMProcessor.config.maxFrames = 32
@@ -911,6 +928,16 @@ class VLMEvaluator {
                         qwen25vlProcessor.config.maxPixels = 512 * 28 * 28  // 401,408
                         qwen25vlProcessor.config.minPixels = 128 * 28 * 28  // 200,704
                     }
+                } else if let qwen3vlProcessor = context.processor as? Qwen3VLProcessor {
+                    if (videoURL != nil) || (video != nil) {
+                        // For videos: lower pixel limits
+                        qwen3vlProcessor.config.maxPixels = 128 * 28 * 28  // 200,704
+                        qwen3vlProcessor.config.minPixels = 64 * 28 * 28   // 50,176
+                    } else if image != nil {
+                        // For images: higher pixel limits
+                        qwen3vlProcessor.config.maxPixels = 512 * 28 * 28  // 401,408
+                        qwen3vlProcessor.config.minPixels = 128 * 28 * 28  // 200,704
+                    }
                 }
             }
 
@@ -948,6 +975,9 @@ class VLMEvaluator {
                 } else if let qwen25vlProcessor = context.processor as? Qwen25VLProcessor, videoURL != nil {
                     // Use frame specification for video processing with Qwen25VL
                     lmInput = try await qwen25vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen25VLFrameSpecification(frameSpecification))
+                } else if let qwen3vlProcessor = context.processor as? Qwen3VLProcessor, videoURL != nil {
+                    // Use frame specification for video processing with Qwen3VL
+                    lmInput = try await qwen3vlProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToQwen3VLFrameSpecification(frameSpecification))
                 } else if let smolVLMProcessor = context.processor as? SmolVLMProcessor, videoURL != nil {
                     // Use frame specification for video processing with SmolVLM2
                     lmInput = try await smolVLMProcessor.prepareWithFrameSpecification(input: userInput, frameSpecification: convertToSmolVLM2FrameSpecification(frameSpecification))
@@ -1138,10 +1168,24 @@ class VLMEvaluator {
                     }
                     
                     return output
+                } else if let qwen3VL = context.model as? Qwen3VL {
+                    guard let processorConfig = (context.processor as? Qwen3VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen3VLProcessor"
+                    }
+                    
+                    let frameEmbeddings = try await qwen3VL.extractVideoPatchEmbeddings(from: videoURL, processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Successfully extracted patch embeddings for \(frameEmbeddings.count) frames:\n"
+                    for (index, embedding) in frameEmbeddings.enumerated() {
+                        output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                    }
+                    
+                    return output
                 } else if let qwen25VL = context.model as? Qwen25VL {
                     return "Video patch extraction not yet implemented for Qwen25VL"
                 } else {
-                    return "Error: Model is not Qwen2VL or Qwen25VL"
+                    return "Error: Model is not Qwen2VL, Qwen3VL, or Qwen25VL"
                 }
             }
             
@@ -1181,10 +1225,24 @@ class VLMEvaluator {
                     }
                     
                     return output
+                } else if let qwen3VL = context.model as? Qwen3VL {
+                    guard let processorConfig = (context.processor as? Qwen3VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen3VLProcessor"
+                    }
+                    
+                    let frameEmbeddings = try await qwen3VL.extractAndPoolVideoEmbeddings(from: videoURL, frameSpecification: convertToQwen3VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Successfully extracted and mean-pooled embeddings for \(frameEmbeddings.count) frames:\n"
+                    for (index, embedding) in frameEmbeddings.enumerated() {
+                        output += "Frame \(index + 1): shape \(embedding.shape), size \(embedding.size)\n"
+                    }
+                    
+                    return output
                 } else if let qwen25VL = context.model as? Qwen25VL {
                     return "Video mean pooling not yet implemented for Qwen25VL"
                 } else {
-                    return "Error: Model is not Qwen2VL or Qwen25VL"
+                    return "Error: Model is not Qwen2VL, Qwen3VL, or Qwen25VL"
                 }
             }
             
@@ -1235,10 +1293,35 @@ class VLMEvaluator {
                     output += "Total frames: \(distances.count)\n"
                     
                     return output
+                } else if let qwen3VL = context.model as? Qwen3VL {
+                    guard let processorConfig = (context.processor as? Qwen3VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen3VLProcessor"
+                    }
+                    
+                    let distances = try await qwen3VL.calculateVideoFrameDistances(from: videoURL, frameSpecification: convertToQwen3VLFrameSpecification(frameSpecification), processorConfig: processorConfig)
+                    
+                    var output = "Frame specification: \(frameSpecification)\n"
+                    output += "Cosine distances to reference frame (Frame 1):\n"
+                    for (index, distance) in distances.enumerated() {
+                        output += "Frame \(index + 1): \(String(format: "%.4f", distance))\n"
+                    }
+                    
+                    // Add summary statistics
+                    let minDistance = distances.min() ?? 0.0
+                    let maxDistance = distances.max() ?? 0.0
+                    let avgDistance = distances.reduce(0, +) / Float(distances.count)
+                    
+                    output += "\nSummary:\n"
+                    output += "Min distance: \(String(format: "%.4f", minDistance))\n"
+                    output += "Max distance: \(String(format: "%.4f", maxDistance))\n"
+                    output += "Average distance: \(String(format: "%.4f", avgDistance))\n"
+                    output += "Total frames: \(distances.count)\n"
+                    
+                    return output
                 } else if let qwen25VL = context.model as? Qwen25VL {
                     return "Video similarity calculation not yet implemented for Qwen25VL"
                 } else {
-                    return "Error: Model is not Qwen2VL or Qwen25VL"
+                    return "Error: Model is not Qwen2VL, Qwen3VL, or Qwen25VL"
                 }
             }
             
@@ -1305,10 +1388,51 @@ class VLMEvaluator {
                 }
                 
                 return output
+                } else if let qwen3VL = context.model as? Qwen3VL {
+                    guard let processorConfig = (context.processor as? Qwen3VLProcessor)?.config else {
+                        return "Error: Processor is not Qwen3VLProcessor"
+                    }
+                
+                let startTime = Date()
+                let sceneChanges = try await qwen3VL.detectSceneChanges(from: videoURL, threshold: threshold, minSceneDuration: TimeInterval(minSceneDuration), maxSceneDuration: TimeInterval(maxSceneDuration), processorConfig: processorConfig)
+                let endTime = Date()
+                let duration = endTime.timeIntervalSince(startTime)
+                
+                var output = "Scene Change Detection Results:\n"
+                output += "Threshold: \(String(format: "%.2f", threshold))\n"
+                output += "Min scene duration: \(String(format: "%.1f", minSceneDuration))s\n"
+                output += "Max scene duration: \(String(format: "%.1f", maxSceneDuration))s\n"
+                output += "Total scenes detected: \(sceneChanges.count)\n"
+                output += "Processing time: \(String(format: "%.2f", duration)) seconds\n\n"
+                
+                output += "Scene boundaries:\n"
+                for (sceneIndex, (frameIndex, timestamp)) in sceneChanges.enumerated() {
+                    output += "Scene \(sceneIndex + 1): starts at frame \(frameIndex) (\(String(format: "%.1f", timestamp))s)\n"
+                }
+                
+                // Calculate scene durations if we have multiple scenes
+                if sceneChanges.count > 1 {
+                    output += "\nScene durations:\n"
+                    for i in 0..<(sceneChanges.count - 1) {
+                        let startFrame = sceneChanges[i].frameIndex
+                        let startTime = sceneChanges[i].timestamp
+                        let endFrame = sceneChanges[i + 1].frameIndex - 1
+                        let endTime = sceneChanges[i + 1].timestamp - 0.5 // Subtract 0.5s since we're at 2 FPS
+                        let frameDuration = endFrame - startFrame + 1
+                        let timeDuration = endTime - startTime
+                        output += "Scene \(i + 1): \(frameDuration) frames (\(String(format: "%.1f", timeDuration))s) - frames \(startFrame)-\(endFrame) (\(String(format: "%.1f", startTime))s-\(String(format: "%.1f", endTime))s)\n"
+                    }
+                    
+                    // Last scene duration
+                    let lastSceneStart = sceneChanges.last!
+                    output += "Scene \(sceneChanges.count): from frame \(lastSceneStart.frameIndex) (\(String(format: "%.1f", lastSceneStart.timestamp))s) to end\n"
+                }
+                
+                return output
                 } else if let qwen25VL = context.model as? Qwen25VL {
                     return "Scene change detection not yet implemented for Qwen25VL"
                 } else {
-                    return "Error: Model is not Qwen2VL or Qwen25VL"
+                    return "Error: Model is not Qwen2VL, Qwen3VL, or Qwen25VL"
                 }
             }
             

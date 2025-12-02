@@ -1087,7 +1087,7 @@
 				C397D8F22CD2F60B00B87EE2 /* XCLocalSwiftPackageReference "Libraries/.." */,
 				C32A18442D00E13E0092A5B6 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				C32B4C6B2DA7132C00EF663D /* XCRemoteSwiftPackageReference "swift-async-algorithms" */,
-				2ACA27442EDE20C50025C519 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				2ACA77232EDF2613008D0AF6 /* XCLocalSwiftPackageReference "../mlx-swift-lm" */,
 			);
 			productRefGroup = C39273752B606A0A00368D5D /* Products */;
 			projectDirPath = "";
@@ -3373,6 +3373,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		2ACA77232EDF2613008D0AF6 /* XCLocalSwiftPackageReference "../mlx-swift-lm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../mlx-swift-lm";
+		};
 		C397D8F22CD2F60B00B87EE2 /* XCLocalSwiftPackageReference "Libraries/.." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Libraries/..;
@@ -3380,14 +3384,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		2ACA27442EDE20C50025C519 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/jimmycmlo/mlx-swift-lm.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 		81695B3F2BA373D300F260D8 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
